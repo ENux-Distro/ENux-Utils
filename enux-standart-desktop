@@ -1,0 +1,39 @@
+#!/bin/bash
+
+[ "$EUID" -ne 0 ] && echo "Run as root." && exit 1 
+
+command -v whiptail >/dev/null 2>&1 || {
+    apt update && apt install -y whiptail
+}
+
+XFCE_PACKAGES=$(whiptail --title "ENux Standart - XFCE Selection" \
+--checklist "Select XFCE components:" 15 60 5 \
+"xfce4" "Main XFCE desktop" ON \
+"xfce4-goodies" "Extra XFCE plugins" ON \
+3>&1 1>&2 2>&3)
+
+[ $? -ne 0 ] && exit 1
+
+DM_PACKAGES=$(whiptail --title "ENux Standart - Display Manager" \
+--checklist "Select display manager components:" 15 60 5 \
+"lightdm" "Display Manager" ON \
+"lightdm-gtk-greeter" "GTK Greeter" ON \
+3>&1 1>&2 2>&3)
+
+[ $? -ne 0 ] && exit 1
+
+ALL_PACKAGES=$(echo "$XFCE_PACKAGES $DM_PACKAGES" | tr -d '"')
+
+if [ -z "$ALL_PACKAGES" ]; then
+    whiptail --msgbox "No packages selected. Nothing to install." 8 45
+    exit 1
+fi
+
+apt update
+apt install -y $ALL_PACKAGES
+
+if echo "$ALL_PACKAGES" | grep -q lightdm; then
+    systemctl enable lightdm
+fi
+
+whiptail --msgbox "Installation complete!" 8 40
