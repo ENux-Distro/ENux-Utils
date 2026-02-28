@@ -1,0 +1,37 @@
+#!/bin/bash
+# Usage: sudo enuxbootstrap /path/to/target
+
+set -e
+
+TARGET="$1"
+
+if [ -z "$TARGET" ]; then
+    echo "Usage: $0 /path/to/target"
+    exit 1
+fi
+
+echo "Starting ENuxbootstrap on $TARGET …"
+
+sudo debootstrap stable "$TARGET" http://deb.debian.org/debian
+
+echo "Mounting virtual filesystems …"
+sudo mount --bind /proc "$TARGET/proc"
+sudo mount --bind /sys "$TARGET/sys"
+sudo mount --bind /dev "$TARGET/dev"
+sudo cp /etc/resolv.conf "$TARGET/etc/resolv.conf"
+
+sudo wget -O "$TARGET/linux-image-6.18.5-enux.deb" \
+    https://github.com/ENux-Distro/mirrors/releases/download/6.18.5-enux/linux-image-6.18.5-enux.deb
+
+sudo chroot "$TARGET" /bin/bash -c "apt update && apt install -y /linux-image-6.18.5-enux.deb"
+
+sudo wget -O "$TARGET/usr/bin/enux-chroot" \
+    https://raw.githubusercontent.com/ENux-Distro/mirrors/main/enux-chroot
+
+sudo chmod +x "$TARGET/usr/bin/enux-chroot"
+
+sudo umount "$TARGET/proc" || true
+sudo umount "$TARGET/sys" || true
+sudo umount "$TARGET/dev" || true
+
+echo "ENuxbootstrap is done!"
