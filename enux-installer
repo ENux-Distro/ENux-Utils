@@ -1,8 +1,8 @@
 #!/bin/bash
 
-echo "----------------------------"
-echo "WELCOME TO ENUX-LW INSTALLER"
-echo "----------------------------"
+echo "-----------------------------"
+echo "WELCOME TO THE ENUX INSTALLER"
+echo "-----------------------------"
 
 # --- 1. UEFI/BIOS Detection ---
 if [ -d "/sys/firmware/efi" ]; then
