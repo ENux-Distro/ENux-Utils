@@ -1,133 +1,119 @@
 #!/bin/bash
 
-# --- ENux Black & White Theme Override ---
-export NEWT_COLORS='
-  root=,black
-  window=white,black
-  border=white,black
-  shadow=white,black
-  button=black,white
-  actbutton=white,black
-  compactbutton=black,white
-  title=white,black
-  roottext=white,black
-  textbox=white,black
-  acttextbox=black,white
-  entry=white,black
-  disentry=gray,black
-  checkbox=white,black
-  actcheckbox=black,white
-  listbox=white,black
-  actlistbox=black,white
-  actselitem=black,white
-'
-
-# --- TUI Setup ---
-WT_HEIGHT=20
-WT_WIDTH=70
-
-exit_script() {
-    clear
-    echo "ENux installation aborted."
-    exit 1
-}
+echo "----------------------------"
+echo "WELCOME TO ENUX-LW INSTALLER"
+echo "----------------------------"
 
 # --- 1. UEFI/BIOS Detection ---
 if [ -d "/sys/firmware/efi" ]; then
     IS_UEFI=true
-    MODE_MSG="System Mode: UEFI Detected"
+    echo "System Mode: UEFI Detected"
 else
     IS_UEFI=false
-    MODE_MSG="System Mode: BIOS/Legacy Detected"
+    echo "System Mode: BIOS/Legacy Detected"
 fi
 
-whiptail --title " ENux INSTALLER " --msgbox "Welcome to the ENux Installer\n\n$MODE_MSG\n\nReady to install ENux $WT_HEIGHT $WT_WIDTH
+# --- 2. Disk Selection & Partitioning ---
+lsblk
+echo ""
+read -p "Enter the disk to partition (e.g., /dev/sda): " SELECTED_DISK
 
-# --- 2. Disk & Partitioning ---
-DISK_LIST=$(lsblk -dno NAME,SIZE,MODEL | awk '{print "/dev/"$1, "["$2, $3$4$5"]"}' | tr '\n' ' ')
-SELECTED_DISK=$(whiptail --title " STEP 1: DISK SELECTION " --menu "Choose target drive:" $WT_HEIGHT $WT_WIDTH 6 $DISK_LIST 3>&1 1>&2 2>&3) || exit_script
-
-# Launch cfdisk
+echo "Launching cfdisk..."
+sleep 2
 cfdisk "$SELECTED_DISK"
 
 # --- 3. Partition Assignment ---
-ROOT_PART=$(whiptail --title " STEP 2: ROOT PARTITION " --inputbox "Enter ROOT partition (e.g., /dev/sda2):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3) || exit_script
+lsblk
+echo ""
+read -p "Enter your ROOT partition (e.g., /dev/sda2): " ROOT_PART
 
 if [ "$IS_UEFI" = true ]; then
-    EFI_PART=$(whiptail --title " STEP 3: EFI PARTITION " --inputbox "Enter EFI partition (e.g., /dev/sda1):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3) || exit_script
+    read -p "Enter your EFI partition (e.g., /dev/sda1): " EFI_PART
 fi
 
-if whiptail --title " STEP 4: SWAP " --yesno "Did you create a SWAP partition?" $WT_HEIGHT $WT_WIDTH; then
-    SWAP_PART=$(whiptail --title " SWAP PARTITION " --inputbox "Enter SWAP partition (e.g., /dev/sda3):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3) || exit_script
+read -p "Did you create a SWAP partition? (y/n): " HAS_SWAP
+if [[ "$HAS_SWAP" =~ ^[Yy]$ ]]; then
+    read -p "Enter your SWAP partition (e.g., /dev/sda3): " SWAP_PART
 fi
 
-# --- 4. Final Verification ---
-CONFIRM_MSG="ENux Deployment Summary:
----------------------------
-Disk:      $SELECTED_DISK
-Root:      $ROOT_PART
-EFI:       ${EFI_PART:-N/A}
-Swap:      ${SWAP_PART:-None}
-Mode:      ${MODE_MSG}
+# --- 4. Formatting & Mounting ---
+echo "Formatting and mounting..."
+mkfs.ext4 -F "$ROOT_PART"
+mount "$ROOT_PART" /mnt
 
-WARNING: This will format partitions. Proceed?"
+if [ "$IS_UEFI" = true ]; then
+    mkfs.fat -F 32 "$EFI_PART"
+    mkdir -p /mnt/boot/efi
+    mount "$EFI_PART" /mnt/boot/efi
+fi
 
-whiptail --title " FINAL VERIFICATION " --yesno "$CONFIRM_MSG" $WT_HEIGHT $WT_WIDTH || exit_script
+if [[ -n "$SWAP_PART" ]]; then
+    mkswap "$SWAP_PART"
+    swapon "$SWAP_PART"
+fi
 
-# --- 5. Deployment Gauge ---
-(
-    # Formatting & Mounting
-    echo 10; mkfs.ext4 -F "$ROOT_PART" >/dev/null 2>&1
-    mount "$ROOT_PART" /mnt
+# --- 5. Copying the Root Filesystem ---
+echo "Copying system files to /mnt (Excluding virtual FS)..."
+# Simplified exclude syntax to prevent EOF errors
+rsync -aAXv \
+    --exclude=/dev/* \
+    --exclude=/proc/* \
+    --exclude=/sys/* \
+    --exclude=/tmp/* \
+    --exclude=/run/* \
+    --exclude=/mnt/* \
+    --exclude=/media/* \
+    --exclude=/lost+found \
+    / /mnt
 
-    if [ "$IS_UEFI" = true ]; then
-        mkfs.fat -F 32 "$EFI_PART" >/dev/null 2>&1
-        mkdir -p /mnt/boot/efi
-        mount "$EFI_PART" /mnt/boot/efi
-    fi
+# --- 6. Generating FSTAB ---
+echo "Generating fstab..."
+echo "$ROOT_PART  /  ext4  errors=remount-ro  0  1" > /mnt/etc/fstab
+if [ "$IS_UEFI" = true ]; then
+    echo "$EFI_PART  /boot/efi  vfat  umask=0077  0  2" >> /mnt/etc/fstab
+fi
+if [[ -n "$SWAP_PART" ]]; then
+    echo "$SWAP_PART  none  swap  sw  0  0" >> /mnt/etc/fstab
+fi
 
-    if [[ -n "$SWAP_PART" ]]; then
-        mkswap "$SWAP_PART" >/dev/null 2>&1
-        swapon "$SWAP_PART" >/dev/null 2>&1
-    fi
+# --- 7. The Bedrock Hijack Preparation ---
+echo "Downloading Bedrock Linux installer..."
+wget https://github.com/bedrocklinux/bedrocklinux-userland/releases/download/0.7.31beta3/bedrock-linux-0.7.31beta3-x86_64.sh -O /mnt/bedrock-install.sh
+chmod +x /mnt/bedrock-install.sh
 
-    # Copying System
-    echo 30; 
-    rsync -aAX --exclude={"/dev/*","/proc/*","/sys/*","/tmp/*","/run/*","/mnt/*","/media/*","/lost+found"} / /mnt
+# --- 8. Chroot: GRUB & Hijack ---
+echo "Entering chroot to finalize..."
 
-    # Generating FSTAB
-    echo 50;
-    echo "$ROOT_PART  /  ext4  errors=remount-ro  0  1" > /mnt/etc/fstab
-    [ -n "$EFI_PART" ] && echo "$EFI_PART  /boot/efi  vfat  umask=0077  0  2" >> /mnt/etc/fstab
-    [ -n "$SWAP_PART" ] && echo "$SWAP_PART  none  swap  sw  0  0" >> /mnt/etc/fstab
+# Bind mount API filesystems
+for i in dev dev/pts proc sys run; do mount --bind /$i /mnt/$i; done
 
-    # Hijack Prep
-    echo 60;
-    wget https://github.com/bedrocklinux/bedrocklinux-userland/releases/download/0.7.31/bedrock-linux-0.7.31-x86_64.sh -O /mnt/bedrock-install.sh
-    chmod +x /mnt/bedrock-install.sh
+# Using a more stable chroot execution method
+chroot /mnt /bin/bash <<CHROOT_BLOCK
+apt-get update
 
-    # Chroot Logic
-    echo 80;
-    for i in dev dev/pts proc sys run; do mount --bind /$i /mnt/$i; done
+if [ "$IS_UEFI" = true ]; then
+    echo "Installing UEFI GRUB..."
+    DEBIAN_FRONTEND=noninteractive apt-get install -y grub-efi-amd64 efibootmgr
+    grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=BEDROCK
+else
+    echo "Installing BIOS GRUB..."
+    DEBIAN_FRONTEND=noninteractive apt-get install -y grub-pc
+    grub-install --target=i386-pc "$SELECTED_DISK"
+fi
 
-    cat <<EOF | chroot /mnt /bin/bash
-    apt-get update
-    if [ "$IS_UEFI" = true ]; then
-        DEBIAN_FRONTEND=noninteractive apt-get install -y grub-efi-amd64 efibootmgr
-        grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ENux
-    else
-        DEBIAN_FRONTEND=noninteractive apt-get install -y grub-pc
-        grub-install --target=i386-pc "$SELECTED_DISK"
-    fi
-    grub-mkconfig -o /boot/grub/grub.cfg
-    yes "Not reversible!" | bash /bedrock-install.sh --hijack
-EOF
-    echo 100
-) | whiptail --title " DEPLOYING ENux " --gauge "Cloning system and hijacking via Bedrock..." $WT_HEIGHT $WT_WIDTH 0
+grub-mkconfig -o /boot/grub/grub.cfg
 
-# --- 6. Cleanup ---
-umount -l /mnt/dev/pts /mnt/dev /mnt/proc /mnt/sys /mnt/run 2>/dev/null
-umount -R /mnt 2>/dev/null
+echo "Starting Bedrock Hijack..."
+# Use 'sh' directly inside the chroot
+yes "Not reversible!" | bash /bedrock-install.sh --hijack
+CHROOT_BLOCK
 
-whiptail --title " SUCCESS " --msgbox "Installation complete. Remove installation media and reboot." $WT_HEIGHT $WT_WIDTH
-clear
+echo "DONE! Unmounting..."
+umount -l /mnt/dev/pts
+umount -l /mnt/dev
+umount -l /mnt/proc
+umount -l /mnt/sys
+umount -l /mnt/run
+umount -R /mnt
+
+echo "Installation complete. Reboot for Finalizer"
