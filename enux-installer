@@ -49,9 +49,8 @@ while true; do
 
     dialog --backtitle "ENux Installer" \
            --title "Partitioning" \
-           --yesno "\nDone partitioning? Or do you want to return to cfdisk?" \
-           8 55
-    [ $? -ne 0 ] && break   # "No" = done, "Yes" = go back
+           --yesno "\nDo you want to return to cfdisk?" \
+           8 55 || break   # "No" = done, "Yes" = go back
 done
 
 # ── Partition selection ────────────────────────
@@ -69,11 +68,15 @@ ROOT_PART=$(dialog --backtitle "ENux Installer" \
                    15 60 6 "${PARTS[@]}" \
                    3>&1 1>&2 2>&3) || bail "No root partition selected."
 
-EFI_PART=$(dialog --backtitle "ENux Installer" \
-                  --title "EFI Partition" \
-                  --menu "\nSelect the EFI partition:" \
-                  15 60 6 "${PARTS[@]}" \
-                  3>&1 1>&2 2>&3) || bail "No EFI partition selected."
+# Only ask for EFI partition on EFI systems
+EFI_PART="none"
+if [ -d /sys/firmware/efi ]; then
+    EFI_PART=$(dialog --backtitle "ENux Installer" \
+                      --title "EFI Partition" \
+                      --menu "\nSelect the EFI partition:" \
+                      15 60 6 "${PARTS[@]}" \
+                      3>&1 1>&2 2>&3) || bail "No EFI partition selected."
+fi
 
 SWAP_PART=$(dialog --backtitle "ENux Installer" \
                    --title "Swap Partition (Optional)" \
@@ -109,9 +112,12 @@ HOSTNAME=$(dialog --backtitle "ENux Installer" \
                   3>&1 1>&2 2>&3) || bail "No hostname entered."
 
 # ── Confirm ────────────────────────────────────
+EFI_LINE=""
+[ "$EFI_PART" != "none" ] && EFI_LINE="\n  EFI:       $EFI_PART"
+
 dialog --backtitle "ENux Installer" \
        --title "Confirm" \
-       --yesno "\nReady to install with:\n\n  Disk:      $DISK\n  Root:      $ROOT_PART\n  EFI:       $EFI_PART\n  Swap:      $SWAP_PART\n  User:      $USERNAME\n  Hostname:  $HOSTNAME\n\nProceed?" \
+       --yesno "\nReady to install with:\n\n  Disk:      $DISK\n  Root:      $ROOT_PART$EFI_LINE\n  Swap:      $SWAP_PART\n  User:      $USERNAME\n  Hostname:  $HOSTNAME\n\nProceed?" \
        16 55 || bail "Installation cancelled by user."
 
 # ── Format & mount ─────────────────────────────
@@ -123,8 +129,10 @@ mkfs.ext4 -F $ROOT_PART >> $LOGFILE 2>&1 || bail "Failed to format $ROOT_PART"
 
 mkdir -p $MOUNTPOINT
 mount $ROOT_PART $MOUNTPOINT
-mkdir -p $MOUNTPOINT/boot/efi
-mount $EFI_PART $MOUNTPOINT/boot/efi
+if [ "$EFI_PART" != "none" ]; then
+    mkdir -p $MOUNTPOINT/boot/efi
+    mount $EFI_PART $MOUNTPOINT/boot/efi
+fi
 echo "5"
 
 # ── Copy live system ───────────────────────────
@@ -149,12 +157,14 @@ echo "47"
 # ── fstab ──────────────────────────────────────
 log "Writing fstab..."
 ROOT_UUID=$(blkid -s UUID -o value $ROOT_PART)
-EFI_UUID=$(blkid -s UUID -o value $EFI_PART)
 cat > $MOUNTPOINT/etc/fstab <<EOF
 # ENux fstab
 UUID=$ROOT_UUID  /          ext4  errors=remount-ro  0  1
-UUID=$EFI_UUID   /boot/efi  vfat  umask=0077         0  1
 EOF
+if [ "$EFI_PART" != "none" ]; then
+    EFI_UUID=$(blkid -s UUID -o value $EFI_PART)
+    echo "UUID=$EFI_UUID   /boot/efi  vfat  umask=0077         0  1" >> $MOUNTPOINT/etc/fstab
+fi
 [ "$SWAP_PART" != "none" ] && echo "UUID=$(blkid -s UUID -o value $SWAP_PART)  none  swap  sw  0  0" >> $MOUNTPOINT/etc/fstab
 echo "50"
 
@@ -190,7 +200,7 @@ chroot $MOUNTPOINT update-initramfs -u -k $KERNEL_VERSION >> $LOGFILE 2>&1
 echo "62"
 
 # ── Bedrock Linux ──────────────────────────────
-log "Downloading Bedrock Linux 0.7.31..."
+log "Downloading Bedrock"
 wget -q -O $MOUNTPOINT/tmp/bedrock-installer.sh "$BEDROCK_URL" >> $LOGFILE 2>&1 || \
     bail "Failed to download Bedrock. Check internet connection."
 chmod +x $MOUNTPOINT/tmp/bedrock-installer.sh
@@ -205,11 +215,16 @@ echo "78"
 
 # ── GRUB ───────────────────────────────────────
 log "Installing GRUB..."
-chroot $MOUNTPOINT grub-install --target=x86_64-efi \
-    --efi-directory=/boot/efi \
-    --bootloader-id=ENux \
-    --recheck >> $LOGFILE 2>&1
-chroot $MOUNTPOINT grub-install --target=i386-pc $DISK >> $LOGFILE 2>&1
+if [ -d /sys/firmware/efi ]; then
+    chroot $MOUNTPOINT apt-get install -y grub-efi-amd64 >> $LOGFILE 2>&1
+    chroot $MOUNTPOINT grub-install --target=x86_64-efi \
+        --efi-directory=/boot/efi \
+        --bootloader-id=ENux \
+        --recheck >> $LOGFILE 2>&1
+else
+    chroot $MOUNTPOINT apt-get install -y grub-pc >> $LOGFILE 2>&1
+    chroot $MOUNTPOINT grub-install --target=i386-pc $DISK >> $LOGFILE 2>&1
+fi
 chroot $MOUNTPOINT update-grub >> $LOGFILE 2>&1
 echo "90"
 
@@ -223,7 +238,7 @@ umount -l $MOUNTPOINT/run      2>/dev/null || true
 umount -l $MOUNTPOINT/dev      2>/dev/null || true
 umount -l $MOUNTPOINT/proc     2>/dev/null || true
 umount -l $MOUNTPOINT/sys      2>/dev/null || true
-umount -l $MOUNTPOINT/boot/efi 2>/dev/null || true
+[ "$EFI_PART" != "none" ] && umount -l $MOUNTPOINT/boot/efi 2>/dev/null || true
 umount -l $MOUNTPOINT          2>/dev/null || true
 [ "$SWAP_PART" != "none" ] && swapoff $SWAP_PART 2>/dev/null || true
 
@@ -236,7 +251,7 @@ echo "100"
 # ── Done ───────────────────────────────────────
 dialog --backtitle "ENux Installer" \
        --title "Installation Complete!" \
-       --yesno "\n✔ ENux has been successfully installed!\n\n  User:      $USERNAME\n  Hostname:  $HOSTNAME\n  Bedrock:   0.7.31 ✔\n\nReboot now?" \
+       --yesno "\n✔ ENux has been successfully installed!\n\n  User:      $USERNAME\n  Hostname:  $HOSTNAME\n    \nReboot now?" \
        12 50 && reboot
 
 clear
