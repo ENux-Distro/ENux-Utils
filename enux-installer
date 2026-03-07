@@ -8,6 +8,7 @@ DIALOG=dialog
 BACKTITLE="ENux GNU/Linux 5.1.1 Installer"
 LOGFILE=/tmp/enux-install.log
 MOUNTPOINT=/mnt/enux-install
+BEDROCK_URL="https://github.com/bedrocklinux/bedrocklinux-userland/releases/download/0.7.31/bedrock-linux-0.7.31-x86_64.sh"
 
 # Colors for dialog
 export DIALOGRC=/tmp/enux-dialogrc
@@ -53,7 +54,7 @@ check_root() {
 }
 
 check_deps() {
-    for dep in dialog parted mkfs.ext4 mkfs.fat debootstrap grub-install; do
+    for dep in dialog parted mkfs.ext4 mkfs.fat unsquashfs grub-install wget; do
         if ! command -v $dep &>/dev/null; then
             echo "Missing dependency: $dep"
             exit 1
@@ -68,13 +69,13 @@ check_deps() {
 screen_welcome() {
     $DIALOG --backtitle "$BACKTITLE" \
             --title "Welcome to ENux" \
-            --msgbox "\n  ███████╗███╗   ██╗██╗   ██╗██╗  ██╗\n  ██╔════╝████╗  ██║██║   ██║╚██╗██╔╝\n  █████╗  ██╔██╗ ██║██║   ██║ ╚███╔╝\n  ██╔══╝  ██║╚██╗██║██║   ██║ ██╔██╗\n  ███████╗██║ ╚████║╚██████╔╝██╔╝ ██╗\n  ╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝\n\n  Welcome to the ENux GNU/Linux 5.1.1 Installer!\n\n  This installer will guide you through setting up\n  ENux on your machine.\n\n  Make sure you have:\n  - At least 10GB of free disk space\n  - A working internet connection (optional)\n  - A backup of any important data\n" 22 60
+            --msgbox "\n  ███████╗███╗   ██╗██╗   ██╗██╗  ██╗\n  ██╔════╝████╗  ██║██║   ██║╚██╗██╔╝\n  █████╗  ██╔██╗ ██║██║   ██║ ╚███╔╝\n  ██╔══╝  ██║╚██╗██║██║   ██║ ██╔██╗\n  ███████╗██║ ╚████║╚██████╔╝██╔╝ ██╗\n  ╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝\n\n  Welcome to the ENux GNU/Linux 5.1.1 Installer!\n\n  This installer will guide you through setting up\n  ENux on your machine.\n\n  Make sure you have:\n  - At least 10GB of free disk space\n  - A working internet connection (required for Bedrock)\n  - A backup of any important data\n" 22 60
 }
 
 screen_locale() {
     LOCALE=$($DIALOG --backtitle "$BACKTITLE" \
                      --title "Language / Locale" \
-                     --menu "\nSelect your locale:" 20 60 10 \
+                     --menu "\nSelect your locale:" 20 60 11 \
                      "en_US.UTF-8" "English (United States)" \
                      "en_GB.UTF-8" "English (United Kingdom)" \
                      "de_DE.UTF-8" "German (Germany)" \
@@ -93,18 +94,18 @@ screen_locale() {
 screen_keyboard() {
     KEYMAP=$($DIALOG --backtitle "$BACKTITLE" \
                      --title "Keyboard Layout" \
-                     --menu "\nSelect your keyboard layout:" 20 60 10 \
-                     "us"      "English (US)" \
-                     "uk"      "English (UK)" \
-                     "de"      "German" \
-                     "fr"      "French" \
-                     "es"      "Spanish" \
-                     "it"      "Italian" \
-                     "pt"      "Portuguese" \
-                     "tr"      "Turkish (Q)" \
-                     "tr_f"    "Turkish (F)" \
-                     "ru"      "Russian" \
-                     "jp"      "Japanese" \
+                     --menu "\nSelect your keyboard layout:" 20 60 11 \
+                     "us"   "English (US)" \
+                     "uk"   "English (UK)" \
+                     "de"   "German" \
+                     "fr"   "French" \
+                     "es"   "Spanish" \
+                     "it"   "Italian" \
+                     "pt"   "Portuguese" \
+                     "tr"   "Turkish (Q)" \
+                     "tr_f" "Turkish (F)" \
+                     "ru"   "Russian" \
+                     "jp"   "Japanese" \
                      3>&1 1>&2 2>&3) || bail "Keyboard selection cancelled."
     log "Selected keymap: $KEYMAP"
 }
@@ -112,26 +113,25 @@ screen_keyboard() {
 screen_timezone() {
     TIMEZONE=$($DIALOG --backtitle "$BACKTITLE" \
                        --title "Timezone" \
-                       --menu "\nSelect your timezone:" 20 60 12 \
-                       "UTC"                   "UTC" \
-                       "America/New_York"       "Eastern Time (US)" \
-                       "America/Chicago"        "Central Time (US)" \
-                       "America/Denver"         "Mountain Time (US)" \
-                       "America/Los_Angeles"    "Pacific Time (US)" \
-                       "Europe/London"          "London (UK)" \
-                       "Europe/Berlin"          "Berlin (Germany)" \
-                       "Europe/Paris"           "Paris (France)" \
-                       "Europe/Istanbul"        "Istanbul (Turkey)" \
-                       "Europe/Moscow"          "Moscow (Russia)" \
-                       "Asia/Tokyo"             "Tokyo (Japan)" \
-                       "Asia/Shanghai"          "Shanghai (China)" \
-                       "Australia/Sydney"       "Sydney (Australia)" \
+                       --menu "\nSelect your timezone:" 20 60 13 \
+                       "UTC"                 "UTC" \
+                       "America/New_York"    "Eastern Time (US)" \
+                       "America/Chicago"     "Central Time (US)" \
+                       "America/Denver"      "Mountain Time (US)" \
+                       "America/Los_Angeles" "Pacific Time (US)" \
+                       "Europe/London"       "London (UK)" \
+                       "Europe/Berlin"       "Berlin (Germany)" \
+                       "Europe/Paris"        "Paris (France)" \
+                       "Europe/Istanbul"     "Istanbul (Turkey)" \
+                       "Europe/Moscow"       "Moscow (Russia)" \
+                       "Asia/Tokyo"          "Tokyo (Japan)" \
+                       "Asia/Shanghai"       "Shanghai (China)" \
+                       "Australia/Sydney"    "Sydney (Australia)" \
                        3>&1 1>&2 2>&3) || bail "Timezone selection cancelled."
     log "Selected timezone: $TIMEZONE"
 }
 
 screen_disk_select() {
-    # Build disk list dynamically
     DISKS=()
     while IFS= read -r line; do
         DEV=$(echo "$line" | awk '{print $1}')
@@ -153,9 +153,9 @@ screen_partition_mode() {
     PART_MODE=$($DIALOG --backtitle "$BACKTITLE" \
                         --title "Partitioning Mode" \
                         --menu "\nHow would you like to partition $INSTALL_DISK?" 15 65 3 \
-                        "auto"    "Automatic - Wipe disk and install ENux" \
-                        "dual"    "Dual Boot - Install alongside existing OS" \
-                        "manual"  "Manual - Configure partitions yourself" \
+                        "auto"   "Automatic - Wipe disk and install ENux" \
+                        "dual"   "Dual Boot - Install alongside existing OS" \
+                        "manual" "Manual - Configure partitions yourself" \
                         3>&1 1>&2 2>&3) || bail "Partition mode selection cancelled."
     log "Partition mode: $PART_MODE"
 }
@@ -167,7 +167,6 @@ screen_auto_partition() {
 
     log "Auto partitioning $INSTALL_DISK"
 
-    # Wipe and partition
     run wipefs -a $INSTALL_DISK
     run parted -s $INSTALL_DISK mklabel gpt
     run parted -s $INSTALL_DISK mkpart ESP fat32 1MiB 513MiB
@@ -175,7 +174,6 @@ screen_auto_partition() {
     run parted -s $INSTALL_DISK mkpart swap linux-swap 513MiB 4609MiB
     run parted -s $INSTALL_DISK mkpart root ext4 4609MiB 100%
 
-    # Detect partition names (handles nvme0n1p1 vs sda1)
     if [[ $INSTALL_DISK == *"nvme"* ]] || [[ $INSTALL_DISK == *"mmcblk"* ]]; then
         EFI_PART="${INSTALL_DISK}p1"
         SWAP_PART="${INSTALL_DISK}p2"
@@ -194,7 +192,6 @@ screen_auto_partition() {
 }
 
 screen_dual_boot_partition() {
-    # Show existing partitions
     PART_INFO=$(lsblk $INSTALL_DISK -o NAME,SIZE,FSTYPE,MOUNTPOINT --noheadings 2>/dev/null)
 
     $DIALOG --backtitle "$BACKTITLE" \
@@ -202,7 +199,6 @@ screen_dual_boot_partition() {
             --msgbox "\nExisting partitions on $INSTALL_DISK:\n\n$PART_INFO\n\nIn the next step, select the partition to install ENux root (/) on.\nMake sure you have free/unallocated space available.\n\nTip: Use GParted from another live environment to resize partitions first." \
             20 70
 
-    # Select root partition
     PARTS=()
     while IFS= read -r line; do
         PNAME=$(echo "$line" | awk '{print $1}')
@@ -218,7 +214,6 @@ screen_dual_boot_partition() {
                         "${PARTS[@]}" \
                         3>&1 1>&2 2>&3) || bail "Root partition selection cancelled."
 
-    # Select or skip EFI
     EFI_PART=$($DIALOG --backtitle "$BACKTITLE" \
                        --title "Select EFI Partition" \
                        --menu "\nSelect your existing EFI partition:\n(Usually the first small FAT32 partition)" \
@@ -237,11 +232,9 @@ screen_manual_partition() {
             --msgbox "\nYou will now be dropped into a shell with cfdisk.\n\nCreate at minimum:\n  - 1 EFI partition  (FAT32, 512MB+, type: EFI System)\n  - 1 Root partition (ext4, 8GB+)\n  - 1 Swap partition (optional but recommended)\n\nWhen done, type 'exit' to return to the installer." \
             16 65
 
-    # Drop to cfdisk
     clear
     cfdisk $INSTALL_DISK
 
-    # Now ask user to identify the partitions
     PARTS=()
     while IFS= read -r line; do
         PNAME=$(echo "$line" | awk '{print $1}')
@@ -280,14 +273,12 @@ screen_manual_partition() {
 }
 
 screen_user_setup() {
-    # Username
     USERNAME=$($DIALOG --backtitle "$BACKTITLE" \
                        --title "Create User" \
                        --inputbox "\nEnter your username:\n(lowercase, no spaces)" \
                        10 50 \
                        3>&1 1>&2 2>&3) || bail "User setup cancelled."
 
-    # Validate username
     if ! echo "$USERNAME" | grep -qE '^[a-z][a-z0-9_-]{0,31}$'; then
         $DIALOG --backtitle "$BACKTITLE" \
                 --title "Invalid Username" \
@@ -296,7 +287,6 @@ screen_user_setup() {
         return
     fi
 
-    # Password
     PASSWORD=$($DIALOG --backtitle "$BACKTITLE" \
                        --title "Create User" \
                        --passwordbox "\nEnter password for $USERNAME:" \
@@ -317,7 +307,6 @@ screen_user_setup() {
         return
     fi
 
-    # Root password
     ROOT_PASSWORD=$($DIALOG --backtitle "$BACKTITLE" \
                             --title "Root Password" \
                             --passwordbox "\nEnter root password:" \
@@ -339,8 +328,8 @@ screen_hostname() {
 screen_confirm() {
     $DIALOG --backtitle "$BACKTITLE" \
             --title "Confirm Installation" \
-            --yesno "\nReady to install ENux with the following settings:\n\n  Disk:       $INSTALL_DISK\n  Mode:       $PART_MODE\n  Root:       $ROOT_PART\n  EFI:        $EFI_PART\n  Swap:       ${SWAP_PART:-none}\n  Locale:     $LOCALE\n  Keymap:     $KEYMAP\n  Timezone:   $TIMEZONE\n  Username:   $USERNAME\n  Hostname:   $HOSTNAME\n\nProceed with installation?" \
-            18 60
+            --yesno "\nReady to install ENux with the following settings:\n\n  Disk:       $INSTALL_DISK\n  Mode:       $PART_MODE\n  Root:       $ROOT_PART\n  EFI:        $EFI_PART\n  Swap:       ${SWAP_PART:-none}\n  Locale:     $LOCALE\n  Keymap:     $KEYMAP\n  Timezone:   $TIMEZONE\n  Username:   $USERNAME\n  Hostname:   $HOSTNAME\n  Bedrock:    0.7.31 (will be downloaded)\n\nProceed with installation?" \
+            20 60
 }
 
 # ──────────────────────────────────────────────
@@ -349,24 +338,22 @@ screen_confirm() {
 
 do_install() {
     (
-    echo "2"  ; sleep 0.2
+    echo "2"
     # Mount partitions
     mkdir -p $MOUNTPOINT
     mount $ROOT_PART $MOUNTPOINT
     mkdir -p $MOUNTPOINT/boot/efi
     mount $EFI_PART $MOUNTPOINT/boot/efi
     [ -n "$SWAP_PART" ] && swapon $SWAP_PART
-    echo "5"  ; sleep 0.2
+    echo "5"
 
     # Copy root filesystem from live squashfs
-    echo "8"
     log "Copying filesystem from live squashfs..."
     unsquashfs -f -d $MOUNTPOINT /run/live/medium/live/filesystem.squashfs >> $LOGFILE 2>&1 || \
         bail "Failed to extract squashfs. Are you running from ENux Live?"
-    echo "35" ; sleep 0.2
+    echo "30"
 
     # Generate fstab
-    echo "40"
     log "Generating fstab..."
     ROOT_UUID=$(blkid -s UUID -o value $ROOT_PART)
     EFI_UUID=$(blkid -s UUID -o value $EFI_PART)
@@ -379,10 +366,9 @@ EOF
         SWAP_UUID=$(blkid -s UUID -o value $SWAP_PART)
         echo "UUID=$SWAP_UUID  none  swap  sw  0  0" >> $MOUNTPOINT/etc/fstab
     fi
-    echo "45" ; sleep 0.2
+    echo "35"
 
-    # Hostname
-    echo "48"
+    # Hostname & hosts
     echo "$HOSTNAME" > $MOUNTPOINT/etc/hostname
     cat > $MOUNTPOINT/etc/hosts <<EOF
 127.0.0.1   localhost
@@ -393,39 +379,36 @@ ff02::2     ip6-allrouters
 EOF
 
     # Locale
-    echo "50"
     log "Setting locale: $LOCALE"
     echo "LANG=$LOCALE" > $MOUNTPOINT/etc/locale.conf
     sed -i "s/^# $LOCALE/$LOCALE/" $MOUNTPOINT/etc/locale.gen 2>/dev/null || \
         echo "$LOCALE UTF-8" >> $MOUNTPOINT/etc/locale.gen
     chroot $MOUNTPOINT locale-gen >> $LOGFILE 2>&1
+    echo "40"
 
     # Keyboard
-    echo "53"
     log "Setting keymap: $KEYMAP"
     cat > $MOUNTPOINT/etc/vconsole.conf <<EOF
 KEYMAP=$KEYMAP
 EOF
 
     # Timezone
-    echo "56"
     log "Setting timezone: $TIMEZONE"
     ln -sf /usr/share/zoneinfo/$TIMEZONE $MOUNTPOINT/etc/localtime
     chroot $MOUNTPOINT hwclock --systohc >> $LOGFILE 2>&1 || true
+    echo "44"
 
     # Create user
-    echo "60"
     log "Creating user: $USERNAME"
     chroot $MOUNTPOINT useradd -m -s /bin/bash -G sudo,audio,video,netdev $USERNAME >> $LOGFILE 2>&1
     echo "$USERNAME:$PASSWORD" | chroot $MOUNTPOINT chpasswd >> $LOGFILE 2>&1
     echo "root:$ROOT_PASSWORD" | chroot $MOUNTPOINT chpasswd >> $LOGFILE 2>&1
 
     # Remove live user
-    echo "63"
     chroot $MOUNTPOINT userdel -r ENux >> $LOGFILE 2>&1 || true
+    echo "48"
 
-    # OS release branding
-    echo "65"
+    # OS branding
     cat > $MOUNTPOINT/etc/os-release <<EOF
 PRETTY_NAME="ENux GNU/Linux 5.1.1"
 NAME="ENux"
@@ -440,14 +423,38 @@ EOF
 ENux GNU/Linux 5.1.1 \n \l
 
 EOF
+    rm -f $MOUNTPOINT/etc/debian_version
+    echo "ENux 5.1.1" > $MOUNTPOINT/etc/enux_version
+    echo "50"
 
-    # Install GRUB
-    echo "70"
-    log "Installing GRUB bootloader..."
+    # Mount virtual filesystems for chroot
     mount --bind /dev  $MOUNTPOINT/dev
     mount --bind /proc $MOUNTPOINT/proc
     mount --bind /sys  $MOUNTPOINT/sys
+    mount --bind /run  $MOUNTPOINT/run
 
+    # ── Bedrock Linux ──────────────────────────
+    log "Downloading Bedrock Linux 0.7.31..."
+    echo "52"
+    wget -q \
+        -O $MOUNTPOINT/tmp/bedrock-installer.sh \
+        "$BEDROCK_URL" >> $LOGFILE 2>&1 || \
+        bail "Failed to download Bedrock Linux installer.\nCheck your internet connection."
+
+    chmod +x $MOUNTPOINT/tmp/bedrock-installer.sh
+    echo "58"
+
+    log "Running Bedrock Linux --hijack..."
+    echo "y" | chroot $MOUNTPOINT /tmp/bedrock-installer.sh --hijack >> $LOGFILE 2>&1 || \
+        bail "Bedrock Linux hijack failed. Check $LOGFILE for details."
+
+    rm -f $MOUNTPOINT/tmp/bedrock-installer.sh
+    log "Bedrock Linux 0.7.31 installed successfully"
+    echo "68"
+    # ───────────────────────────────────────────
+
+    # Install GRUB (runs inside Bedrock environment post-hijack)
+    log "Installing GRUB bootloader..."
     chroot $MOUNTPOINT grub-install --target=x86_64-efi \
         --efi-directory=/boot/efi \
         --bootloader-id=ENux \
@@ -455,24 +462,23 @@ EOF
 
     chroot $MOUNTPOINT grub-install --target=i386-pc \
         $INSTALL_DISK >> $LOGFILE 2>&1
+    echo "80"
 
-    echo "85"
     # Update GRUB config
-    # If dual boot, os-prober will detect other OSes
     if [ "$PART_MODE" = "dual" ]; then
         chroot $MOUNTPOINT apt-get install -y os-prober >> $LOGFILE 2>&1 || true
         echo "GRUB_DISABLE_OS_PROBER=false" >> $MOUNTPOINT/etc/default/grub
     fi
-
     chroot $MOUNTPOINT update-grub >> $LOGFILE 2>&1
+    echo "90"
 
-    echo "92"
     # Cleanup live boot hooks
     rm -f $MOUNTPOINT/etc/live/config.conf 2>/dev/null || true
-    rm -f $MOUNTPOINT/lib/live/config/* 2>/dev/null || true
+    rm -rf $MOUNTPOINT/lib/live/config/* 2>/dev/null || true
 
-    # Unmount
-    echo "96"
+    # Unmount everything cleanly
+    echo "95"
+    umount -l $MOUNTPOINT/run  2>/dev/null || true
     umount -l $MOUNTPOINT/dev  2>/dev/null || true
     umount -l $MOUNTPOINT/proc 2>/dev/null || true
     umount -l $MOUNTPOINT/sys  2>/dev/null || true
@@ -483,15 +489,15 @@ EOF
     echo "100"
     ) | $DIALOG --backtitle "$BACKTITLE" \
                 --title "Installing ENux..." \
-                --gauge "\nInstalling ENux GNU/Linux 5.1.1 to $ROOT_PART...\n\nThis may take a few minutes." \
-                10 65 0
+                --gauge "\nInstalling ENux GNU/Linux 5.1.1 to $ROOT_PART...\n\nThis may take a few minutes. Bedrock Linux will be\ndownloaded and hijacked automatically." \
+                12 65 0
 }
 
 screen_finish() {
     $DIALOG --backtitle "$BACKTITLE" \
             --title "Installation Complete!" \
-            --yesno "\n✔ ENux GNU/Linux 5.1.1 has been successfully installed!\n\n  Root:      $ROOT_PART\n  EFI:       $EFI_PART\n  User:      $USERNAME\n  Hostname:  $HOSTNAME\n\nWould you like to reboot now?" \
-            14 55
+            --yesno "\n✔ ENux GNU/Linux 5.1.1 has been successfully installed!\n\n  Root:      $ROOT_PART\n  EFI:       $EFI_PART\n  User:      $USERNAME\n  Hostname:  $HOSTNAME\n  Bedrock:   0.7.31 ✔\n\nWould you like to reboot now?" \
+            16 55
 
     if [ $? -eq 0 ]; then
         reboot
