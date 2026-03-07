@@ -69,7 +69,7 @@ check_deps() {
 screen_welcome() {
     $DIALOG --backtitle "$BACKTITLE" \
             --title "Welcome to ENux" \
-            --msgbox "\n  ███████╗███╗   ██╗██╗   ██╗██╗  ██╗\n  ██╔════╝████╗  ██║██║   ██║╚██╗██╔╝\n  █████╗  ██╔██╗ ██║██║   ██║ ╚███╔╝\n  ██╔══╝  ██║╚██╗██║██║   ██║ ██╔██╗\n  ███████╗██║ ╚████║╚██████╔╝██╔╝ ██╗\n  ╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝\n\n  Welcome to the ENux GNU/Linux 5.1.1 Installer!\n\n  This installer will guide you through setting up\n  ENux on your machine.\n\n  Make sure you have:\n  - At least 10GB of free disk space\n  - A working internet connection (required for Bedrock)\n  - A backup of any important data\n" 22 60
+            --msgbox "\n  Welcome to the ENux GNU/Linux 5.1.1 Installer!\n\n  This installer will guide you through setting up\n  ENux on your machine.\n\n  Make sure you have:\n  - At least 20GB of free disk space\n  - A working internet connection\n  - A backup of any important data\n" 22 60
 }
 
 screen_locale() {
