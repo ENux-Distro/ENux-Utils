@@ -1,107 +1,153 @@
 #!/bin/bash
+# ENux Installer - Simple TUI Installer for ENux GNU/Linux
 
 set -e
 
-DIALOG=dialog
-BACKTITLE="ENux GNU/Linux 5.1.1 Installer"
 MOUNTPOINT=/mnt/ENux
 LOGFILE=/tmp/enux-install.log
 BEDROCK_URL="https://github.com/bedrocklinux/bedrocklinux-userland/releases/download/0.7.31/bedrock-linux-0.7.31-x86_64.sh"
 
 log() { echo "[$(date '+%H:%M:%S')] $*" >> $LOGFILE; }
+msg() { dialog --msgbox "\n$*" 10 60; }
+bail() { msg "ERROR: $*\n\nCheck $LOGFILE for details."; exit 1; }
 
-bail() {
-$DIALOG --backtitle "$BACKTITLE" \
-    --title "Error" \
-    --msgbox "\n$1\n\nCheck $LOGFILE for details." 10 55
-exit 1
-}
-
-run() { log "RUN: $*"; "$@" >> $LOGFILE 2>&1 || bail "Command failed: $*"; }
-
+# ── Root check ─────────────────────────────────
 if [ "$EUID" -ne 0 ]; then
-echo "ENux Installer must be run as root."
-exit 1
+    echo "Please run as root."
+    exit 1
 fi
 
 > $LOGFILE
-log "ENux Installer started"
+clear
 
-$DIALOG --backtitle "$BACKTITLE" \
---title "ENux Installer" \
---msgbox "\nWelcome to the ENux GNU/Linux 5.1.1 Installer.\n\nYou will be asked to select your partitions.\nThe system will then be installed automatically.\n\n⚠ Make sure you have an internet connection.\n  Bedrock Linux will be downloaded during install." \
-13 58
+# ── Welcome ────────────────────────────────────
+dialog --backtitle "ENux Installer" \
+       --title "Welcome" \
+       --msgbox "\n  ENux GNU/Linux Installer\n\n  You will be dropped into cfdisk to partition your disk.\n  After partitioning, the installer will ask which\n  partitions to use, then install ENux automatically.\n\n  Make sure you have an internet connection for Bedrock." \
+       14 60
 
+# ── Disk select ────────────────────────────────
+DISKS=()
+while IFS= read -r line; do
+    DEV=$(echo "$line" | awk '{print $1}')
+    SIZE=$(echo "$line" | awk '{print $2}')
+    MODEL=$(echo "$line" | awk '{$1=$2=""; print $0}' | xargs)
+    DISKS+=("/dev/$DEV" "$SIZE $MODEL")
+done < <(lsblk -d -o NAME,SIZE,MODEL --noheadings | grep -v loop)
+
+DISK=$(dialog --backtitle "ENux Installer" \
+              --title "Select Disk" \
+              --menu "\nSelect the disk to partition:" \
+              15 65 6 \
+              "${DISKS[@]}" \
+              3>&1 1>&2 2>&3) || bail "No disk selected."
+
+# ── cfdisk loop ────────────────────────────────
+while true; do
+    clear
+    cfdisk $DISK
+
+    dialog --backtitle "ENux Installer" \
+           --title "Partitioning" \
+           --yesno "\nDone partitioning? Or do you want to return to cfdisk?" \
+           8 55
+    [ $? -ne 0 ] && break   # "No" = done, "Yes" = go back
+done
+
+# ── Partition selection ────────────────────────
 PARTS=()
 while IFS= read -r line; do
-PNAME=$(echo "$line" | awk '{print $1}')
-PSIZE=$(echo "$line" | awk '{print $2}')
-PFS=$(echo "$line"   | awk '{print $3}')
-PARTS+=("/dev/$PNAME" "$PSIZE ${PFS:-unknown}")
-done < <(lsblk -o NAME,SIZE,FSTYPE --noheadings | grep -E "^[├─└ ]*[a-z].*[0-9]" | sed 's/^[^a-z]*//')
+    PNAME=$(echo "$line" | awk '{print $1}')
+    PSIZE=$(echo "$line" | awk '{print $2}')
+    PFS=$(echo "$line"   | awk '{print $3}')
+    PARTS+=("/dev/$PNAME" "$PSIZE ${PFS:-unknown}")
+done < <(lsblk $DISK -o NAME,SIZE,FSTYPE --noheadings | grep -v "^$(basename $DISK) ")
 
-ROOT_PART=$($DIALOG --backtitle "$BACKTITLE" \
-            --title "Root Partition" \
-            --menu "\nSelect partition for / (will be formatted as ext4):" \
-            20 60 8 "${PARTS[@]}" \
-            3>&1 1>&2 2>&3) || bail "Cancelled."
+ROOT_PART=$(dialog --backtitle "ENux Installer" \
+                   --title "Root Partition" \
+                   --menu "\nSelect the ROOT (/) partition:" \
+                   15 60 6 "${PARTS[@]}" \
+                   3>&1 1>&2 2>&3) || bail "No root partition selected."
 
-EFI_PART=$($DIALOG --backtitle "$BACKTITLE" \
-           --title "EFI Partition" \
-           --menu "\nSelect your EFI partition (FAT32, ~512MB):" \
-           20 60 8 "${PARTS[@]}" \
-           3>&1 1>&2 2>&3) || bail "Cancelled."
+EFI_PART=$(dialog --backtitle "ENux Installer" \
+                  --title "EFI Partition" \
+                  --menu "\nSelect the EFI partition:" \
+                  15 60 6 "${PARTS[@]}" \
+                  3>&1 1>&2 2>&3) || bail "No EFI partition selected."
 
-SWAP_PART=$($DIALOG --backtitle "$BACKTITLE" \
-            --title "Swap Partition (Optional)" \
-            --menu "\nSelect swap partition or skip:" \
-            20 60 9 \
-            "none" "Skip - no swap" \
-            "${PARTS[@]}" \
-            3>&1 1>&2 2>&3) || SWAP_PART="none"
+SWAP_PART=$(dialog --backtitle "ENux Installer" \
+                   --title "Swap Partition (Optional)" \
+                   --menu "\nSelect the SWAP partition:" \
+                   15 60 7 \
+                   "none" "Skip swap" \
+                   "${PARTS[@]}" \
+                   3>&1 1>&2 2>&3) || SWAP_PART="none"
 
-# Confirm
-INSTALL_DISK=$(lsblk -no PKNAME $ROOT_PART 2>/dev/null | head -1)
-INSTALL_DISK="/dev/$INSTALL_DISK"
+# ── User setup ─────────────────────────────────
+USERNAME=$(dialog --backtitle "ENux Installer" \
+                  --title "Create User" \
+                  --inputbox "\nEnter your username:" \
+                  8 50 \
+                  3>&1 1>&2 2>&3) || bail "No username entered."
 
-$DIALOG --backtitle "$BACKTITLE" \
---title "Confirm" \
---yesno "\nReady to install:\n\n  Root:  $ROOT_PART  (will be formatted)\n  EFI:   $EFI_PART\n  Swap:  $SWAP_PART\n  Disk:  $INSTALL_DISK\n\nProceed?" \
-13 50 || bail "Cancelled."
+PASSWORD=$(dialog --backtitle "ENux Installer" \
+                  --title "Create User" \
+                  --passwordbox "\nEnter password for $USERNAME:" \
+                  8 50 \
+                  3>&1 1>&2 2>&3) || bail "No password entered."
 
+ROOT_PASSWORD=$(dialog --backtitle "ENux Installer" \
+                       --title "Root Password" \
+                       --passwordbox "\nEnter root password:" \
+                       8 50 \
+                       3>&1 1>&2 2>&3) || bail "No root password entered."
+
+HOSTNAME=$(dialog --backtitle "ENux Installer" \
+                  --title "Hostname" \
+                  --inputbox "\nEnter a hostname for your system:" \
+                  8 50 "ENux" \
+                  3>&1 1>&2 2>&3) || bail "No hostname entered."
+
+# ── Confirm ────────────────────────────────────
+dialog --backtitle "ENux Installer" \
+       --title "Confirm" \
+       --yesno "\nReady to install with:\n\n  Disk:      $DISK\n  Root:      $ROOT_PART\n  EFI:       $EFI_PART\n  Swap:      $SWAP_PART\n  User:      $USERNAME\n  Hostname:  $HOSTNAME\n\nProceed?" \
+       16 55 || bail "Installation cancelled by user."
+
+# ── Format & mount ─────────────────────────────
 (
 echo "2"
 log "Formatting partitions..."
-run mkfs.ext4 -F $ROOT_PART
-[ "$SWAP_PART" != "none" ] && run mkswap $SWAP_PART
+mkfs.ext4 -F $ROOT_PART >> $LOGFILE 2>&1 || bail "Failed to format $ROOT_PART"
+[ "$SWAP_PART" != "none" ] && mkswap $SWAP_PART >> $LOGFILE 2>&1 && swapon $SWAP_PART >> $LOGFILE 2>&1
+
+mkdir -p $MOUNTPOINT
+mount $ROOT_PART $MOUNTPOINT
+mkdir -p $MOUNTPOINT/boot/efi
+mount $EFI_PART $MOUNTPOINT/boot/efi
 echo "5"
 
-log "Mounting partitions..."
-mkdir -p $MOUNTPOINT
-run mount $ROOT_PART $MOUNTPOINT
-mkdir -p $MOUNTPOINT/boot/efi
-run mount $EFI_PART $MOUNTPOINT/boot/efi
-[ "$SWAP_PART" != "none" ] && swapon $SWAP_PART >> $LOGFILE 2>&1 || true
+# ── Copy live system ───────────────────────────
+log "Copying live system to $MOUNTPOINT..."
 echo "8"
-
-log "Copying root filesystem (excluding virtual filesystems)..."
-run rsync -aAX --progress \
---exclude=/proc \
---exclude=/sys \
---exclude=/dev \
---exclude=/run \
---exclude=/tmp \
---exclude=/mnt \
---exclude=/lost+found \
-/ $MOUNTPOINT/
+rsync -aAX --progress \
+    --exclude=/proc \
+    --exclude=/sys \
+    --exclude=/dev \
+    --exclude=/run \
+    --exclude=/tmp \
+    --exclude=/mnt \
+    --exclude=/lost+found \
+    --exclude=/media \
+    / $MOUNTPOINT >> $LOGFILE 2>&1 || bail "rsync failed."
 echo "45"
 
-log "Creating essential directories..."
-mkdir -p $MOUNTPOINT/{proc,sys,dev,run,tmp,mnt}
-chmod 1777 $MOUNTPOINT/tmp
-echo "48"
+# Recreate excluded dirs
+mkdir -p $MOUNTPOINT/{proc,sys,dev,run,tmp,mnt,media}
+echo "47"
 
-log "Generating fstab..."
+# ── fstab ──────────────────────────────────────
+log "Writing fstab..."
 ROOT_UUID=$(blkid -s UUID -o value $ROOT_PART)
 EFI_UUID=$(blkid -s UUID -o value $EFI_PART)
 cat > $MOUNTPOINT/etc/fstab <<EOF
@@ -109,60 +155,89 @@ cat > $MOUNTPOINT/etc/fstab <<EOF
 UUID=$ROOT_UUID  /          ext4  errors=remount-ro  0  1
 UUID=$EFI_UUID   /boot/efi  vfat  umask=0077         0  1
 EOF
-[ "$SWAP_PART" != "none" ] && \
-echo "UUID=$(blkid -s UUID -o value $SWAP_PART)  none  swap  sw  0  0" >> $MOUNTPOINT/etc/fstab
+[ "$SWAP_PART" != "none" ] && echo "UUID=$(blkid -s UUID -o value $SWAP_PART)  none  swap  sw  0  0" >> $MOUNTPOINT/etc/fstab
 echo "50"
 
-log "Mounting virtual filesystems..."
+# ── Hostname ───────────────────────────────────
+echo "$HOSTNAME" > $MOUNTPOINT/etc/hostname
+cat > $MOUNTPOINT/etc/hosts <<EOF
+127.0.0.1   localhost
+127.0.1.1   $HOSTNAME
+::1         localhost ip6-localhost ip6-loopback
+ff02::1     ip6-allnodes
+ff02::2     ip6-allrouters
+EOF
+echo "52"
+
+# ── User setup ─────────────────────────────────
+log "Setting up user: $USERNAME"
+# Remove live ENux user, create real user
 mount --bind /dev  $MOUNTPOINT/dev
 mount --bind /proc $MOUNTPOINT/proc
 mount --bind /sys  $MOUNTPOINT/sys
 mount --bind /run  $MOUNTPOINT/run
 
-log "Updating initramfs..."
-run chroot $MOUNTPOINT update-initramfs -u -k all
-echo "60"
+chroot $MOUNTPOINT userdel -r ENux >> $LOGFILE 2>&1 || true
+chroot $MOUNTPOINT useradd -m -s /bin/bash -G sudo,audio,video,netdev $USERNAME >> $LOGFILE 2>&1
+echo "$USERNAME:$PASSWORD" | chroot $MOUNTPOINT chpasswd >> $LOGFILE 2>&1
+echo "root:$ROOT_PASSWORD"  | chroot $MOUNTPOINT chpasswd >> $LOGFILE 2>&1
+echo "55"
 
+# ── Update initramfs ───────────────────────────
+log "Updating initramfs..."
+KERNEL_VERSION=$(ls $MOUNTPOINT/boot/vmlinuz-* | tail -1 | sed 's|.*/vmlinuz-||')
+chroot $MOUNTPOINT update-initramfs -u -k $KERNEL_VERSION >> $LOGFILE 2>&1
+echo "62"
+
+# ── Bedrock Linux ──────────────────────────────
 log "Downloading Bedrock Linux 0.7.31..."
 wget -q -O $MOUNTPOINT/tmp/bedrock-installer.sh "$BEDROCK_URL" >> $LOGFILE 2>&1 || \
-bail "Failed to download Bedrock. Check your internet connection."
+    bail "Failed to download Bedrock. Check internet connection."
 chmod +x $MOUNTPOINT/tmp/bedrock-installer.sh
 echo "68"
 
-log "Hijacking with Bedrock Linux..."
+log "Running Bedrock --hijack..."
 echo "y" | chroot $MOUNTPOINT /tmp/bedrock-installer.sh --hijack >> $LOGFILE 2>&1 || \
-bail "Bedrock hijack failed."
+    bail "Bedrock hijack failed."
 rm -f $MOUNTPOINT/tmp/bedrock-installer.sh
+log "Bedrock installed successfully"
 echo "78"
 
+# ── GRUB ───────────────────────────────────────
 log "Installing GRUB..."
-run chroot $MOUNTPOINT grub-install --target=x86_64-efi \
---efi-directory=/boot/efi \
---bootloader-id=ENux \
---recheck
-run chroot $MOUNTPOINT grub-install --target=i386-pc $INSTALL_DISK
-run chroot $MOUNTPOINT update-grub
-echo "92"
+chroot $MOUNTPOINT grub-install --target=x86_64-efi \
+    --efi-directory=/boot/efi \
+    --bootloader-id=ENux \
+    --recheck >> $LOGFILE 2>&1
+chroot $MOUNTPOINT grub-install --target=i386-pc $DISK >> $LOGFILE 2>&1
+chroot $MOUNTPOINT update-grub >> $LOGFILE 2>&1
+echo "90"
 
-log "Cleaning up..."
-umount -l $MOUNTPOINT/run  2>/dev/null || true
-umount -l $MOUNTPOINT/dev  2>/dev/null || true
-umount -l $MOUNTPOINT/proc 2>/dev/null || true
-umount -l $MOUNTPOINT/sys  2>/dev/null || true
+# ── Cleanup live hooks ─────────────────────────
+rm -f $MOUNTPOINT/etc/live/config.conf 2>/dev/null || true
+rm -rf $MOUNTPOINT/lib/live/config/* 2>/dev/null || true
+
+# ── Unmount ────────────────────────────────────
+echo "95"
+umount -l $MOUNTPOINT/run      2>/dev/null || true
+umount -l $MOUNTPOINT/dev      2>/dev/null || true
+umount -l $MOUNTPOINT/proc     2>/dev/null || true
+umount -l $MOUNTPOINT/sys      2>/dev/null || true
 umount -l $MOUNTPOINT/boot/efi 2>/dev/null || true
-umount -l $MOUNTPOINT      2>/dev/null || true
+umount -l $MOUNTPOINT          2>/dev/null || true
 [ "$SWAP_PART" != "none" ] && swapoff $SWAP_PART 2>/dev/null || true
 
 echo "100"
-) | $DIALOG --backtitle "$BACKTITLE" \
-    --title "Installing ENux..." \
-    --gauge "\nInstalling ENux GNU/Linux 5.1.1...\n\nThis may take a few minutes." \
-    10 55 0
+) | dialog --backtitle "ENux Installer" \
+           --title "Installing ENux..." \
+           --gauge "\nInstalling ENux to $ROOT_PART...\n\nPlease wait, this may take a few minutes." \
+           10 60 0
 
+# ── Done ───────────────────────────────────────
+dialog --backtitle "ENux Installer" \
+       --title "Installation Complete!" \
+       --yesno "\n✔ ENux has been successfully installed!\n\n  User:      $USERNAME\n  Hostname:  $HOSTNAME\n  Bedrock:   0.7.31 ✔\n\nReboot now?" \
+       12 50 && reboot
 
-$DIALOG --backtitle "$BACKTITLE" \
---title "Installation Complete!" \
---yesno "\n✔ ENux GNU/Linux 5.1.1 installed successfully!\n\nWould you like to reboot now?" \
-9 48
-
-[ $? -eq 0 ] && reboot || clear
+clear
+echo "Done! You can reboot manually when ready."
