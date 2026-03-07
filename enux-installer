@@ -1,542 +1,168 @@
 #!/bin/bash
-# ENux Installer - TUI Installer for ENux GNU/Linux
-# Uses bash + dialog for a clean TUI experience
 
 set -e
 
 DIALOG=dialog
 BACKTITLE="ENux GNU/Linux 5.1.1 Installer"
+MOUNTPOINT=/mnt/ENux
 LOGFILE=/tmp/enux-install.log
-MOUNTPOINT=/mnt/enux-install
 BEDROCK_URL="https://github.com/bedrocklinux/bedrocklinux-userland/releases/download/0.7.31/bedrock-linux-0.7.31-x86_64.sh"
 
-# Colors for dialog
-export DIALOGRC=/tmp/enux-dialogrc
-cat > $DIALOGRC <<EOF
-use_colors = ON
-screen_color = (BLACK,BLACK,OFF)
-dialog_color = (WHITE,BLACK,OFF)
-title_color = (WHITE,BLACK,ON)
-border_color = (WHITE,BLACK,ON)
-button_active_color = (BLACK,WHITE,ON)
-button_inactive_color = (WHITE,BLACK,OFF)
-tag_color = (WHITE,BLACK,ON)
-tag_selected_color = (BLACK,WHITE,ON)
-inputbox_color = (WHITE,BLACK,OFF)
-inputbox_border_color = (WHITE,BLACK,ON)
-EOF
-
-# ──────────────────────────────────────────────
-# HELPERS
-# ──────────────────────────────────────────────
-
-log() {
-    echo "[$(date '+%H:%M:%S')] $*" >> $LOGFILE
-}
+log() { echo "[$(date '+%H:%M:%S')] $*" >> $LOGFILE; }
 
 bail() {
-    $DIALOG --backtitle "$BACKTITLE" \
-            --title "Installation Failed" \
-            --msgbox "\nAn error occurred:\n\n$1\n\nCheck $LOGFILE for details." 10 60
-    exit 1
+$DIALOG --backtitle "$BACKTITLE" \
+    --title "Error" \
+    --msgbox "\n$1\n\nCheck $LOGFILE for details." 10 55
+exit 1
 }
 
-run() {
-    log "RUN: $*"
-    "$@" >> $LOGFILE 2>&1 || bail "Command failed: $*"
-}
+run() { log "RUN: $*"; "$@" >> $LOGFILE 2>&1 || bail "Command failed: $*"; }
 
-check_root() {
-    if [ "$EUID" -ne 0 ]; then
-        echo "ENux Installer must be run as root."
-        exit 1
-    fi
-}
+if [ "$EUID" -ne 0 ]; then
+echo "ENux Installer must be run as root."
+exit 1
+fi
 
-check_deps() {
-    for dep in dialog parted mkfs.ext4 mkfs.fat unsquashfs grub-install wget; do
-        if ! command -v $dep &>/dev/null; then
-            echo "Missing dependency: $dep"
-            exit 1
-        fi
-    done
-}
+> $LOGFILE
+log "ENux Installer started"
 
-# ──────────────────────────────────────────────
-# SCREENS
-# ──────────────────────────────────────────────
+$DIALOG --backtitle "$BACKTITLE" \
+--title "ENux Installer" \
+--msgbox "\nWelcome to the ENux GNU/Linux 5.1.1 Installer.\n\nYou will be asked to select your partitions.\nThe system will then be installed automatically.\n\n⚠ Make sure you have an internet connection.\n  Bedrock Linux will be downloaded during install." \
+13 58
 
-screen_welcome() {
-    $DIALOG --backtitle "$BACKTITLE" \
-            --title "Welcome to ENux" \
-            --msgbox "\n  Welcome to the ENux GNU/Linux 5.1.1 Installer!\n\n  This installer will guide you through setting up\n  ENux on your machine.\n\n  Make sure you have:\n  - At least 20GB of free disk space\n  - A working internet connection\n  - A backup of any important data\n" 22 60
-}
+PARTS=()
+while IFS= read -r line; do
+PNAME=$(echo "$line" | awk '{print $1}')
+PSIZE=$(echo "$line" | awk '{print $2}')
+PFS=$(echo "$line"   | awk '{print $3}')
+PARTS+=("/dev/$PNAME" "$PSIZE ${PFS:-unknown}")
+done < <(lsblk -o NAME,SIZE,FSTYPE --noheadings | grep -E "^[├─└ ]*[a-z].*[0-9]" | sed 's/^[^a-z]*//')
 
-screen_locale() {
-    LOCALE=$($DIALOG --backtitle "$BACKTITLE" \
-                     --title "Language / Locale" \
-                     --menu "\nSelect your locale:" 20 60 11 \
-                     "en_US.UTF-8" "English (United States)" \
-                     "en_GB.UTF-8" "English (United Kingdom)" \
-                     "de_DE.UTF-8" "German (Germany)" \
-                     "fr_FR.UTF-8" "French (France)" \
-                     "es_ES.UTF-8" "Spanish (Spain)" \
-                     "it_IT.UTF-8" "Italian (Italy)" \
-                     "pt_BR.UTF-8" "Portuguese (Brazil)" \
-                     "tr_TR.UTF-8" "Turkish (Turkey)" \
-                     "ru_RU.UTF-8" "Russian (Russia)" \
-                     "ja_JP.UTF-8" "Japanese (Japan)" \
-                     "zh_CN.UTF-8" "Chinese Simplified (China)" \
-                     3>&1 1>&2 2>&3) || bail "Locale selection cancelled."
-    log "Selected locale: $LOCALE"
-}
+ROOT_PART=$($DIALOG --backtitle "$BACKTITLE" \
+            --title "Root Partition" \
+            --menu "\nSelect partition for / (will be formatted as ext4):" \
+            20 60 8 "${PARTS[@]}" \
+            3>&1 1>&2 2>&3) || bail "Cancelled."
 
-screen_keyboard() {
-    KEYMAP=$($DIALOG --backtitle "$BACKTITLE" \
-                     --title "Keyboard Layout" \
-                     --menu "\nSelect your keyboard layout:" 20 60 11 \
-                     "us"   "English (US)" \
-                     "uk"   "English (UK)" \
-                     "de"   "German" \
-                     "fr"   "French" \
-                     "es"   "Spanish" \
-                     "it"   "Italian" \
-                     "pt"   "Portuguese" \
-                     "tr"   "Turkish (Q)" \
-                     "tr_f" "Turkish (F)" \
-                     "ru"   "Russian" \
-                     "jp"   "Japanese" \
-                     3>&1 1>&2 2>&3) || bail "Keyboard selection cancelled."
-    log "Selected keymap: $KEYMAP"
-}
+EFI_PART=$($DIALOG --backtitle "$BACKTITLE" \
+           --title "EFI Partition" \
+           --menu "\nSelect your EFI partition (FAT32, ~512MB):" \
+           20 60 8 "${PARTS[@]}" \
+           3>&1 1>&2 2>&3) || bail "Cancelled."
 
-screen_timezone() {
-    TIMEZONE=$($DIALOG --backtitle "$BACKTITLE" \
-                       --title "Timezone" \
-                       --menu "\nSelect your timezone:" 20 60 13 \
-                       "UTC"                 "UTC" \
-                       "America/New_York"    "Eastern Time (US)" \
-                       "America/Chicago"     "Central Time (US)" \
-                       "America/Denver"      "Mountain Time (US)" \
-                       "America/Los_Angeles" "Pacific Time (US)" \
-                       "Europe/London"       "London (UK)" \
-                       "Europe/Berlin"       "Berlin (Germany)" \
-                       "Europe/Paris"        "Paris (France)" \
-                       "Europe/Istanbul"     "Istanbul (Turkey)" \
-                       "Europe/Moscow"       "Moscow (Russia)" \
-                       "Asia/Tokyo"          "Tokyo (Japan)" \
-                       "Asia/Shanghai"       "Shanghai (China)" \
-                       "Australia/Sydney"    "Sydney (Australia)" \
-                       3>&1 1>&2 2>&3) || bail "Timezone selection cancelled."
-    log "Selected timezone: $TIMEZONE"
-}
+SWAP_PART=$($DIALOG --backtitle "$BACKTITLE" \
+            --title "Swap Partition (Optional)" \
+            --menu "\nSelect swap partition or skip:" \
+            20 60 9 \
+            "none" "Skip - no swap" \
+            "${PARTS[@]}" \
+            3>&1 1>&2 2>&3) || SWAP_PART="none"
 
-screen_disk_select() {
-    DISKS=()
-    while IFS= read -r line; do
-        DEV=$(echo "$line" | awk '{print $1}')
-        SIZE=$(echo "$line" | awk '{print $2}')
-        MODEL=$(echo "$line" | awk '{$1=$2=""; print $0}' | xargs)
-        DISKS+=("/dev/$DEV" "$SIZE - $MODEL")
-    done < <(lsblk -d -o NAME,SIZE,MODEL --noheadings | grep -v loop)
+# Confirm
+INSTALL_DISK=$(lsblk -no PKNAME $ROOT_PART 2>/dev/null | head -1)
+INSTALL_DISK="/dev/$INSTALL_DISK"
 
-    INSTALL_DISK=$($DIALOG --backtitle "$BACKTITLE" \
-                           --title "Select Disk" \
-                           --menu "\nSelect the disk to install ENux on:\n\n⚠ WARNING: Data may be erased depending on partition mode." \
-                           20 70 8 \
-                           "${DISKS[@]}" \
-                           3>&1 1>&2 2>&3) || bail "Disk selection cancelled."
-    log "Selected disk: $INSTALL_DISK"
-}
+$DIALOG --backtitle "$BACKTITLE" \
+--title "Confirm" \
+--yesno "\nReady to install:\n\n  Root:  $ROOT_PART  (will be formatted)\n  EFI:   $EFI_PART\n  Swap:  $SWAP_PART\n  Disk:  $INSTALL_DISK\n\nProceed?" \
+13 50 || bail "Cancelled."
 
-screen_partition_mode() {
-    PART_MODE=$($DIALOG --backtitle "$BACKTITLE" \
-                        --title "Partitioning Mode" \
-                        --menu "\nHow would you like to partition $INSTALL_DISK?" 15 65 3 \
-                        "auto"   "Automatic - Wipe disk and install ENux" \
-                        "dual"   "Dual Boot - Install alongside existing OS" \
-                        "manual" "Manual - Configure partitions yourself" \
-                        3>&1 1>&2 2>&3) || bail "Partition mode selection cancelled."
-    log "Partition mode: $PART_MODE"
-}
+(
+echo "2"
+log "Formatting partitions..."
+run mkfs.ext4 -F $ROOT_PART
+[ "$SWAP_PART" != "none" ] && run mkswap $SWAP_PART
+echo "5"
 
-screen_auto_partition() {
-    $DIALOG --backtitle "$BACKTITLE" \
-            --title "Auto Partitioning" \
-            --yesno "\n⚠ WARNING: This will ERASE ALL DATA on $INSTALL_DISK!\n\nThe following partitions will be created:\n  - 512MB  EFI partition (FAT32)\n  - 4GB    Swap partition\n  - Rest   Root partition (ext4)\n\nAre you sure you want to continue?" 15 65
+log "Mounting partitions..."
+mkdir -p $MOUNTPOINT
+run mount $ROOT_PART $MOUNTPOINT
+mkdir -p $MOUNTPOINT/boot/efi
+run mount $EFI_PART $MOUNTPOINT/boot/efi
+[ "$SWAP_PART" != "none" ] && swapon $SWAP_PART >> $LOGFILE 2>&1 || true
+echo "8"
 
-    log "Auto partitioning $INSTALL_DISK"
+log "Copying root filesystem (excluding virtual filesystems)..."
+run rsync -aAX --progress \
+--exclude=/proc \
+--exclude=/sys \
+--exclude=/dev \
+--exclude=/run \
+--exclude=/tmp \
+--exclude=/mnt \
+--exclude=/lost+found \
+/ $MOUNTPOINT/
+echo "45"
 
-    run wipefs -a $INSTALL_DISK
-    run parted -s $INSTALL_DISK mklabel gpt
-    run parted -s $INSTALL_DISK mkpart ESP fat32 1MiB 513MiB
-    run parted -s $INSTALL_DISK set 1 esp on
-    run parted -s $INSTALL_DISK mkpart swap linux-swap 513MiB 4609MiB
-    run parted -s $INSTALL_DISK mkpart root ext4 4609MiB 100%
+log "Creating essential directories..."
+mkdir -p $MOUNTPOINT/{proc,sys,dev,run,tmp,mnt}
+chmod 1777 $MOUNTPOINT/tmp
+echo "48"
 
-    if [[ $INSTALL_DISK == *"nvme"* ]] || [[ $INSTALL_DISK == *"mmcblk"* ]]; then
-        EFI_PART="${INSTALL_DISK}p1"
-        SWAP_PART="${INSTALL_DISK}p2"
-        ROOT_PART="${INSTALL_DISK}p3"
-    else
-        EFI_PART="${INSTALL_DISK}1"
-        SWAP_PART="${INSTALL_DISK}2"
-        ROOT_PART="${INSTALL_DISK}3"
-    fi
-
-    run mkfs.fat -F32 $EFI_PART
-    run mkswap $SWAP_PART
-    run mkfs.ext4 -F $ROOT_PART
-
-    log "Auto partitioning complete: EFI=$EFI_PART SWAP=$SWAP_PART ROOT=$ROOT_PART"
-}
-
-screen_dual_boot_partition() {
-    PART_INFO=$(lsblk $INSTALL_DISK -o NAME,SIZE,FSTYPE,MOUNTPOINT --noheadings 2>/dev/null)
-
-    $DIALOG --backtitle "$BACKTITLE" \
-            --title "Dual Boot - Existing Partitions" \
-            --msgbox "\nExisting partitions on $INSTALL_DISK:\n\n$PART_INFO\n\nIn the next step, select the partition to install ENux root (/) on.\nMake sure you have free/unallocated space available.\n\nTip: Use GParted from another live environment to resize partitions first." \
-            20 70
-
-    PARTS=()
-    while IFS= read -r line; do
-        PNAME=$(echo "$line" | awk '{print $1}')
-        PSIZE=$(echo "$line" | awk '{print $2}')
-        PFS=$(echo "$line" | awk '{print $3}')
-        PARTS+=("/dev/$PNAME" "$PSIZE $PFS")
-    done < <(lsblk $INSTALL_DISK -o NAME,SIZE,FSTYPE --noheadings | grep -v "^$(basename $INSTALL_DISK) ")
-
-    ROOT_PART=$($DIALOG --backtitle "$BACKTITLE" \
-                        --title "Select Root Partition" \
-                        --menu "\nSelect the partition for ENux root (/):\n⚠ This partition will be formatted as ext4!" \
-                        20 65 8 \
-                        "${PARTS[@]}" \
-                        3>&1 1>&2 2>&3) || bail "Root partition selection cancelled."
-
-    EFI_PART=$($DIALOG --backtitle "$BACKTITLE" \
-                       --title "Select EFI Partition" \
-                       --menu "\nSelect your existing EFI partition:\n(Usually the first small FAT32 partition)" \
-                       20 65 8 \
-                       "${PARTS[@]}" \
-                       3>&1 1>&2 2>&3) || bail "EFI partition selection cancelled."
-
-    run mkfs.ext4 -F $ROOT_PART
-    SWAP_PART=""
-    log "Dual boot: ROOT=$ROOT_PART EFI=$EFI_PART"
-}
-
-screen_manual_partition() {
-    $DIALOG --backtitle "$BACKTITLE" \
-            --title "Manual Partitioning" \
-            --msgbox "\nYou will now be dropped into a shell with cfdisk.\n\nCreate at minimum:\n  - 1 EFI partition  (FAT32, 512MB+, type: EFI System)\n  - 1 Root partition (ext4, 8GB+)\n  - 1 Swap partition (optional but recommended)\n\nWhen done, type 'exit' to return to the installer." \
-            16 65
-
-    clear
-    cfdisk $INSTALL_DISK
-
-    PARTS=()
-    while IFS= read -r line; do
-        PNAME=$(echo "$line" | awk '{print $1}')
-        PSIZE=$(echo "$line" | awk '{print $2}')
-        PFS=$(echo "$line" | awk '{print $3}')
-        PARTS+=("/dev/$PNAME" "$PSIZE $PFS")
-    done < <(lsblk $INSTALL_DISK -o NAME,SIZE,FSTYPE --noheadings | grep -v "^$(basename $INSTALL_DISK) ")
-
-    ROOT_PART=$($DIALOG --backtitle "$BACKTITLE" \
-                        --title "Identify Root Partition" \
-                        --menu "\nWhich partition is your ROOT (/) partition?" \
-                        20 65 8 "${PARTS[@]}" \
-                        3>&1 1>&2 2>&3) || bail "Root partition not selected."
-
-    EFI_PART=$($DIALOG --backtitle "$BACKTITLE" \
-                       --title "Identify EFI Partition" \
-                       --menu "\nWhich partition is your EFI partition?" \
-                       20 65 8 "${PARTS[@]}" \
-                       3>&1 1>&2 2>&3) || bail "EFI partition not selected."
-
-    SWAP_PART=$($DIALOG --backtitle "$BACKTITLE" \
-                        --title "Identify Swap Partition (Optional)" \
-                        --menu "\nWhich partition is your SWAP partition?\n(Select 'none' to skip)" \
-                        20 65 9 \
-                        "none" "No swap partition" \
-                        "${PARTS[@]}" \
-                        3>&1 1>&2 2>&3) || SWAP_PART="none"
-
-    [ "$SWAP_PART" = "none" ] && SWAP_PART=""
-
-    run mkfs.fat -F32 $EFI_PART
-    run mkfs.ext4 -F $ROOT_PART
-    [ -n "$SWAP_PART" ] && run mkswap $SWAP_PART
-
-    log "Manual: ROOT=$ROOT_PART EFI=$EFI_PART SWAP=$SWAP_PART"
-}
-
-screen_user_setup() {
-    USERNAME=$($DIALOG --backtitle "$BACKTITLE" \
-                       --title "Create User" \
-                       --inputbox "\nEnter your username:\n(lowercase, no spaces)" \
-                       10 50 \
-                       3>&1 1>&2 2>&3) || bail "User setup cancelled."
-
-    if ! echo "$USERNAME" | grep -qE '^[a-z][a-z0-9_-]{0,31}$'; then
-        $DIALOG --backtitle "$BACKTITLE" \
-                --title "Invalid Username" \
-                --msgbox "\nUsername must:\n- Start with a lowercase letter\n- Contain only lowercase letters, numbers, _ or -\n- Be max 32 characters" 12 50
-        screen_user_setup
-        return
-    fi
-
-    PASSWORD=$($DIALOG --backtitle "$BACKTITLE" \
-                       --title "Create User" \
-                       --passwordbox "\nEnter password for $USERNAME:" \
-                       10 50 \
-                       3>&1 1>&2 2>&3) || bail "User setup cancelled."
-
-    PASSWORD_CONFIRM=$($DIALOG --backtitle "$BACKTITLE" \
-                               --title "Create User" \
-                               --passwordbox "\nConfirm password for $USERNAME:" \
-                               10 50 \
-                               3>&1 1>&2 2>&3) || bail "User setup cancelled."
-
-    if [ "$PASSWORD" != "$PASSWORD_CONFIRM" ]; then
-        $DIALOG --backtitle "$BACKTITLE" \
-                --title "Password Mismatch" \
-                --msgbox "\nPasswords do not match! Please try again." 8 45
-        screen_user_setup
-        return
-    fi
-
-    ROOT_PASSWORD=$($DIALOG --backtitle "$BACKTITLE" \
-                            --title "Root Password" \
-                            --passwordbox "\nEnter root password:" \
-                            10 50 \
-                            3>&1 1>&2 2>&3) || bail "Root password cancelled."
-
-    log "User setup: username=$USERNAME"
-}
-
-screen_hostname() {
-    HOSTNAME=$($DIALOG --backtitle "$BACKTITLE" \
-                       --title "Hostname" \
-                       --inputbox "\nEnter a hostname for your system:" \
-                       10 50 "ENux" \
-                       3>&1 1>&2 2>&3) || bail "Hostname setup cancelled."
-    log "Hostname: $HOSTNAME"
-}
-
-screen_confirm() {
-    $DIALOG --backtitle "$BACKTITLE" \
-            --title "Confirm Installation" \
-            --yesno "\nReady to install ENux with the following settings:\n\n  Disk:       $INSTALL_DISK\n  Mode:       $PART_MODE\n  Root:       $ROOT_PART\n  EFI:        $EFI_PART\n  Swap:       ${SWAP_PART:-none}\n  Locale:     $LOCALE\n  Keymap:     $KEYMAP\n  Timezone:   $TIMEZONE\n  Username:   $USERNAME\n  Hostname:   $HOSTNAME\n  Bedrock:    0.7.31 (will be downloaded)\n\nProceed with installation?" \
-            20 60
-}
-
-# ──────────────────────────────────────────────
-# INSTALLATION
-# ──────────────────────────────────────────────
-
-do_install() {
-    (
-    echo "2"
-    # Mount partitions
-    mkdir -p $MOUNTPOINT
-    mount $ROOT_PART $MOUNTPOINT
-    mkdir -p $MOUNTPOINT/boot/efi
-    mount $EFI_PART $MOUNTPOINT/boot/efi
-    [ -n "$SWAP_PART" ] && swapon $SWAP_PART
-    echo "5"
-
-    # Copy root filesystem from live squashfs
-    log "Copying filesystem from live squashfs..."
-    unsquashfs -f -d $MOUNTPOINT /run/live/medium/live/filesystem.squashfs >> $LOGFILE 2>&1 || \
-        bail "Failed to extract squashfs. Are you running from ENux Live?"
-    echo "30"
-
-    # Generate fstab
-    log "Generating fstab..."
-    ROOT_UUID=$(blkid -s UUID -o value $ROOT_PART)
-    EFI_UUID=$(blkid -s UUID -o value $EFI_PART)
-    cat > $MOUNTPOINT/etc/fstab <<EOF
-# ENux fstab - generated by ENux Installer
+log "Generating fstab..."
+ROOT_UUID=$(blkid -s UUID -o value $ROOT_PART)
+EFI_UUID=$(blkid -s UUID -o value $EFI_PART)
+cat > $MOUNTPOINT/etc/fstab <<EOF
+# ENux fstab
 UUID=$ROOT_UUID  /          ext4  errors=remount-ro  0  1
 UUID=$EFI_UUID   /boot/efi  vfat  umask=0077         0  1
 EOF
-    if [ -n "$SWAP_PART" ]; then
-        SWAP_UUID=$(blkid -s UUID -o value $SWAP_PART)
-        echo "UUID=$SWAP_UUID  none  swap  sw  0  0" >> $MOUNTPOINT/etc/fstab
-    fi
-    echo "35"
+[ "$SWAP_PART" != "none" ] && \
+echo "UUID=$(blkid -s UUID -o value $SWAP_PART)  none  swap  sw  0  0" >> $MOUNTPOINT/etc/fstab
+echo "50"
 
-    # Hostname & hosts
-    echo "$HOSTNAME" > $MOUNTPOINT/etc/hostname
-    cat > $MOUNTPOINT/etc/hosts <<EOF
-127.0.0.1   localhost
-127.0.1.1   $HOSTNAME
-::1         localhost ip6-localhost ip6-loopback
-ff02::1     ip6-allnodes
-ff02::2     ip6-allrouters
-EOF
+log "Mounting virtual filesystems..."
+mount --bind /dev  $MOUNTPOINT/dev
+mount --bind /proc $MOUNTPOINT/proc
+mount --bind /sys  $MOUNTPOINT/sys
+mount --bind /run  $MOUNTPOINT/run
 
-    # Locale
-    log "Setting locale: $LOCALE"
-    echo "LANG=$LOCALE" > $MOUNTPOINT/etc/locale.conf
-    sed -i "s/^# $LOCALE/$LOCALE/" $MOUNTPOINT/etc/locale.gen 2>/dev/null || \
-        echo "$LOCALE UTF-8" >> $MOUNTPOINT/etc/locale.gen
-    chroot $MOUNTPOINT locale-gen >> $LOGFILE 2>&1
-    echo "40"
+log "Updating initramfs..."
+run chroot $MOUNTPOINT update-initramfs -u -k all
+echo "60"
 
-    # Keyboard
-    log "Setting keymap: $KEYMAP"
-    cat > $MOUNTPOINT/etc/vconsole.conf <<EOF
-KEYMAP=$KEYMAP
-EOF
+log "Downloading Bedrock Linux 0.7.31..."
+wget -q -O $MOUNTPOINT/tmp/bedrock-installer.sh "$BEDROCK_URL" >> $LOGFILE 2>&1 || \
+bail "Failed to download Bedrock. Check your internet connection."
+chmod +x $MOUNTPOINT/tmp/bedrock-installer.sh
+echo "68"
 
-    # Timezone
-    log "Setting timezone: $TIMEZONE"
-    ln -sf /usr/share/zoneinfo/$TIMEZONE $MOUNTPOINT/etc/localtime
-    chroot $MOUNTPOINT hwclock --systohc >> $LOGFILE 2>&1 || true
-    echo "44"
+log "Hijacking with Bedrock Linux..."
+echo "y" | chroot $MOUNTPOINT /tmp/bedrock-installer.sh --hijack >> $LOGFILE 2>&1 || \
+bail "Bedrock hijack failed."
+rm -f $MOUNTPOINT/tmp/bedrock-installer.sh
+echo "78"
 
-    # Create user
-    log "Creating user: $USERNAME"
-    chroot $MOUNTPOINT useradd -m -s /bin/bash -G sudo,audio,video,netdev $USERNAME >> $LOGFILE 2>&1
-    echo "$USERNAME:$PASSWORD" | chroot $MOUNTPOINT chpasswd >> $LOGFILE 2>&1
-    echo "root:$ROOT_PASSWORD" | chroot $MOUNTPOINT chpasswd >> $LOGFILE 2>&1
+log "Installing GRUB..."
+run chroot $MOUNTPOINT grub-install --target=x86_64-efi \
+--efi-directory=/boot/efi \
+--bootloader-id=ENux \
+--recheck
+run chroot $MOUNTPOINT grub-install --target=i386-pc $INSTALL_DISK
+run chroot $MOUNTPOINT update-grub
+echo "92"
 
-    # Remove live user
-    chroot $MOUNTPOINT userdel -r ENux >> $LOGFILE 2>&1 || true
-    echo "48"
+log "Cleaning up..."
+umount -l $MOUNTPOINT/run  2>/dev/null || true
+umount -l $MOUNTPOINT/dev  2>/dev/null || true
+umount -l $MOUNTPOINT/proc 2>/dev/null || true
+umount -l $MOUNTPOINT/sys  2>/dev/null || true
+umount -l $MOUNTPOINT/boot/efi 2>/dev/null || true
+umount -l $MOUNTPOINT      2>/dev/null || true
+[ "$SWAP_PART" != "none" ] && swapoff $SWAP_PART 2>/dev/null || true
 
-    # OS branding
-    cat > $MOUNTPOINT/etc/os-release <<EOF
-PRETTY_NAME="ENux GNU/Linux 5.1.1"
-NAME="ENux"
-VERSION="5.1.1"
-ID=enux
-ID_LIKE=debian
-HOME_URL="https://github.com/ENux-Distro"
-SUPPORT_URL="https://github.com/ENux-Distro"
-BUG_REPORT_URL="https://github.com/ENux-Distro/ENux/issues"
-EOF
-    cat > $MOUNTPOINT/etc/issue <<EOF
-ENux GNU/Linux 5.1.1 \n \l
+echo "100"
+) | $DIALOG --backtitle "$BACKTITLE" \
+    --title "Installing ENux..." \
+    --gauge "\nInstalling ENux GNU/Linux 5.1.1...\n\nThis may take a few minutes." \
+    10 55 0
 
-EOF
-    rm -f $MOUNTPOINT/etc/debian_version
-    echo "ENux 5.1.1" > $MOUNTPOINT/etc/enux_version
-    echo "50"
 
-    # Mount virtual filesystems for chroot
-    mount --bind /dev  $MOUNTPOINT/dev
-    mount --bind /proc $MOUNTPOINT/proc
-    mount --bind /sys  $MOUNTPOINT/sys
-    mount --bind /run  $MOUNTPOINT/run
+$DIALOG --backtitle "$BACKTITLE" \
+--title "Installation Complete!" \
+--yesno "\n✔ ENux GNU/Linux 5.1.1 installed successfully!\n\nWould you like to reboot now?" \
+9 48
 
-    # ── Bedrock Linux ──────────────────────────
-    log "Downloading Bedrock Linux 0.7.31..."
-    echo "52"
-    wget -q \
-        -O $MOUNTPOINT/tmp/bedrock-installer.sh \
-        "$BEDROCK_URL" >> $LOGFILE 2>&1 || \
-        bail "Failed to download Bedrock Linux installer.\nCheck your internet connection."
-
-    chmod +x $MOUNTPOINT/tmp/bedrock-installer.sh
-    echo "58"
-
-    log "Running Bedrock Linux --hijack..."
-    echo "y" | chroot $MOUNTPOINT /tmp/bedrock-installer.sh --hijack >> $LOGFILE 2>&1 || \
-        bail "Bedrock Linux hijack failed. Check $LOGFILE for details."
-
-    rm -f $MOUNTPOINT/tmp/bedrock-installer.sh
-    log "Bedrock Linux 0.7.31 installed successfully"
-    echo "68"
-    # ───────────────────────────────────────────
-
-    # Install GRUB (runs inside Bedrock environment post-hijack)
-    log "Installing GRUB bootloader..."
-    chroot $MOUNTPOINT grub-install --target=x86_64-efi \
-        --efi-directory=/boot/efi \
-        --bootloader-id=ENux \
-        --recheck >> $LOGFILE 2>&1
-
-    chroot $MOUNTPOINT grub-install --target=i386-pc \
-        $INSTALL_DISK >> $LOGFILE 2>&1
-    echo "80"
-
-    # Update GRUB config
-    if [ "$PART_MODE" = "dual" ]; then
-        chroot $MOUNTPOINT apt-get install -y os-prober >> $LOGFILE 2>&1 || true
-        echo "GRUB_DISABLE_OS_PROBER=false" >> $MOUNTPOINT/etc/default/grub
-    fi
-    chroot $MOUNTPOINT update-grub >> $LOGFILE 2>&1
-    echo "90"
-
-    # Cleanup live boot hooks
-    rm -f $MOUNTPOINT/etc/live/config.conf 2>/dev/null || true
-    rm -rf $MOUNTPOINT/lib/live/config/* 2>/dev/null || true
-
-    # Unmount everything cleanly
-    echo "95"
-    umount -l $MOUNTPOINT/run  2>/dev/null || true
-    umount -l $MOUNTPOINT/dev  2>/dev/null || true
-    umount -l $MOUNTPOINT/proc 2>/dev/null || true
-    umount -l $MOUNTPOINT/sys  2>/dev/null || true
-    umount -l $MOUNTPOINT/boot/efi 2>/dev/null || true
-    umount -l $MOUNTPOINT 2>/dev/null || true
-    [ -n "$SWAP_PART" ] && swapoff $SWAP_PART 2>/dev/null || true
-
-    echo "100"
-    ) | $DIALOG --backtitle "$BACKTITLE" \
-                --title "Installing ENux..." \
-                --gauge "\nInstalling ENux GNU/Linux 5.1.1 to $ROOT_PART...\n\nThis may take a few minutes. Bedrock Linux will be\ndownloaded and hijacked automatically." \
-                12 65 0
-}
-
-screen_finish() {
-    $DIALOG --backtitle "$BACKTITLE" \
-            --title "Installation Complete!" \
-            --yesno "\n✔ ENux GNU/Linux 5.1.1 has been successfully installed!\n\n  Root:      $ROOT_PART\n  EFI:       $EFI_PART\n  User:      $USERNAME\n  Hostname:  $HOSTNAME\n  Bedrock:   0.7.31 ✔\n\nWould you like to reboot now?" \
-            16 55
-
-    if [ $? -eq 0 ]; then
-        reboot
-    else
-        clear
-        echo "Installation complete. You can reboot manually when ready."
-        exit 0
-    fi
-}
-
-# ──────────────────────────────────────────────
-# MAIN
-# ──────────────────────────────────────────────
-
-main() {
-    check_root
-    check_deps
-
-    > $LOGFILE
-    log "ENux Installer started"
-
-    screen_welcome
-    screen_locale
-    screen_keyboard
-    screen_timezone
-    screen_disk_select
-    screen_partition_mode
-
-    case $PART_MODE in
-        auto)   screen_auto_partition ;;
-        dual)   screen_dual_boot_partition ;;
-        manual) screen_manual_partition ;;
-    esac
-
-    screen_user_setup
-    screen_hostname
-    screen_confirm
-    do_install
-    screen_finish
-}
-
-main "$@"
+[ $? -eq 0 ] && reboot || clear
