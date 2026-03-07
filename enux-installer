@@ -41,7 +41,7 @@ else
     MODE_MSG="System Mode: BIOS/Legacy Detected"
 fi
 
-whiptail --title " ENux INSTALLER " --msgbox "Welcome, Emir.\n\n$MODE_MSG\n\nReady to bootstrap the meta-hybrid?" $WT_HEIGHT $WT_WIDTH
+whiptail --title " ENux INSTALLER " --msgbox "Welcome to the ENux Installer\n\n$MODE_MSG\n\nReady to install ENux $WT_HEIGHT $WT_WIDTH
 
 # --- 2. Disk & Partitioning ---
 DISK_LIST=$(lsblk -dno NAME,SIZE,MODEL | awk '{print "/dev/"$1, "["$2, $3$4$5"]"}' | tr '\n' ' ')
@@ -103,7 +103,7 @@ whiptail --title " FINAL VERIFICATION " --yesno "$CONFIRM_MSG" $WT_HEIGHT $WT_WI
 
     # Hijack Prep
     echo 60;
-    wget https://github.com/bedrocklinux/bedrocklinux-userland/releases/download/0.7.31beta3/bedrock-linux-0.7.31-x86_64.sh -O /mnt/bedrock-install.sh
+    wget https://github.com/bedrocklinux/bedrocklinux-userland/releases/download/0.7.31/bedrock-linux-0.7.31-x86_64.sh -O /mnt/bedrock-install.sh
     chmod +x /mnt/bedrock-install.sh
 
     # Chroot Logic
