@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# --- ENux High-Contrast Theme ---
+# --- ENux Black & White Theme Override ---
 export NEWT_COLORS='
   root=,black
   window=white,black
@@ -22,84 +22,112 @@ export NEWT_COLORS='
   actselitem=black,white
 '
 
+# --- TUI Setup ---
+WT_HEIGHT=20
+WT_WIDTH=70
+
 exit_script() {
     clear
     echo "ENux installation aborted."
     exit 1
 }
 
-WT_HEIGHT=18
-WT_WIDTH=70
+# --- 1. UEFI/BIOS Detection ---
+if [ -d "/sys/firmware/efi" ]; then
+    IS_UEFI=true
+    MODE_MSG="System Mode: UEFI Detected"
+else
+    IS_UEFI=false
+    MODE_MSG="System Mode: BIOS/Legacy Detected"
+fi
 
-# --- 1. System Identity & User ---
-HOSTNAME=$(whiptail --title " HOSTNAME " --inputbox "Enter System Hostname:" $WT_HEIGHT $WT_WIDTH "ENux-Station" 3>&1 1>&2 2>&3) || exit_script
-USERNAME=$(whiptail --title " USER ACCOUNT " --inputbox "Enter Username:" $WT_HEIGHT $WT_WIDTH "emir" 3>&1 1>&2 2>&3) || exit_script
-USER_PW=$(whiptail --title " USER PASSWORD " --passwordbox "Password for $USERNAME:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3) || exit_script
-ROOT_PW=$(whiptail --title " ROOT PASSWORD " --passwordbox "Password for Root:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3) || exit_script
+whiptail --title " ENux INSTALLER " --msgbox "Welcome, Emir.\n\n$MODE_MSG\n\nReady to bootstrap the meta-hybrid?" $WT_HEIGHT $WT_WIDTH
 
 # --- 2. Disk & Partitioning ---
 DISK_LIST=$(lsblk -dno NAME,SIZE,MODEL | awk '{print "/dev/"$1, "["$2, $3$4$5"]"}' | tr '\n' ' ')
-TARGET_DISK=$(whiptail --title " DISK SELECTION " --menu "Choose target drive:" $WT_HEIGHT $WT_WIDTH 6 $DISK_LIST 3>&1 1>&2 2>&3) || exit_script
+SELECTED_DISK=$(whiptail --title " STEP 1: DISK SELECTION " --menu "Choose target drive:" $WT_HEIGHT $WT_WIDTH 6 $DISK_LIST 3>&1 1>&2 2>&3) || exit_script
 
-# Partitioning
-cfdisk "$TARGET_DISK"
+# Launch cfdisk
+cfdisk "$SELECTED_DISK"
 
-ROOT_PART=$(whiptail --title " ROOT PARTITION " --inputbox "Enter ROOT partition (e.g., /dev/sda2):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3) || exit_script
-BOOT_PART=$(whiptail --title " EFI PARTITION " --inputbox "Enter EFI partition (leave blank if none):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3) || exit_script
+# --- 3. Partition Assignment ---
+ROOT_PART=$(whiptail --title " STEP 2: ROOT PARTITION " --inputbox "Enter ROOT partition (e.g., /dev/sda2):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3) || exit_script
 
-# --- 3. THE VERIFICATION SCREEN ---
-CONFIRM_MSG="ENux Deployment Summary:
----------------------------
-Hostname:  $HOSTNAME
-User:      $USERNAME
-Root Part: $ROOT_PART
-EFI Part:  ${BOOT_PART:-None}
-
-WARNING: This will format selected partitions and install Bedrock Linux. Proceed?"
-
-if ! whiptail --title " FINAL VERIFICATION " --yesno "$CONFIRM_MSG" $WT_HEIGHT $WT_WIDTH; then
-    exit_script
+if [ "$IS_UEFI" = true ]; then
+    EFI_PART=$(whiptail --title " STEP 3: EFI PARTITION " --inputbox "Enter EFI partition (e.g., /dev/sda1):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3) || exit_script
 fi
 
-# --- 4. DEPLOYMENT ---
+if whiptail --title " STEP 4: SWAP " --yesno "Did you create a SWAP partition?" $WT_HEIGHT $WT_WIDTH; then
+    SWAP_PART=$(whiptail --title " SWAP PARTITION " --inputbox "Enter SWAP partition (e.g., /dev/sda3):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3) || exit_script
+fi
+
+# --- 4. Final Verification ---
+CONFIRM_MSG="ENux Deployment Summary:
+---------------------------
+Disk:      $SELECTED_DISK
+Root:      $ROOT_PART
+EFI:       ${EFI_PART:-N/A}
+Swap:      ${SWAP_PART:-None}
+Mode:      ${MODE_MSG}
+
+WARNING: This will format partitions. Proceed?"
+
+whiptail --title " FINAL VERIFICATION " --yesno "$CONFIRM_MSG" $WT_HEIGHT $WT_WIDTH || exit_script
+
+# --- 5. Deployment Gauge ---
 (
+    # Formatting & Mounting
     echo 10; mkfs.ext4 -F "$ROOT_PART" >/dev/null 2>&1
     mount "$ROOT_PART" /mnt
 
-    if [ -n "$BOOT_PART" ]; then
-        mkfs.vfat -F32 "$BOOT_PART" >/dev/null 2>&1
+    if [ "$IS_UEFI" = true ]; then
+        mkfs.fat -F 32 "$EFI_PART" >/dev/null 2>&1
         mkdir -p /mnt/boot/efi
-        mount "$BOOT_PART" /mnt/boot/efi
+        mount "$EFI_PART" /mnt/boot/efi
     fi
 
-    echo 30; # FSTAB
-    ROOT_UUID=$(blkid -s UUID -o value "$ROOT_PART")
-    echo "UUID=$ROOT_UUID / ext4 errors=remount-ro 0 1" > /mnt/etc/fstab
-    if [ -n "$BOOT_PART" ]; then
-        BOOT_UUID=$(blkid -s UUID -o value "$BOOT_PART")
-        echo "UUID=$BOOT_UUID /boot/efi vfat defaults 0 2" >> /mnt/etc/fstab
+    if [[ -n "$SWAP_PART" ]]; then
+        mkswap "$SWAP_PART" >/dev/null 2>&1
+        swapon "$SWAP_PART" >/dev/null 2>&1
     fi
 
-    echo 50; # Copying Files
+    # Copying System
+    echo 30; 
     rsync -aAX --exclude={"/dev/*","/proc/*","/sys/*","/tmp/*","/run/*","/mnt/*","/media/*","/lost+found"} / /mnt
 
-    echo 70; # Chroot & Bedrock
-    for i in /dev /dev/pts /proc /sys /run; do mount -B $i /mnt$i; done
-    
-    cat <<EOF | chroot /mnt
-    echo "$HOSTNAME" > /etc/hostname
-    echo "root:$ROOT_PW" | chpasswd
-    useradd -m -s /bin/bash "$USERNAME"
-    echo "$USERNAME:$USER_PW" | chpasswd
-    usermod -aG sudo "$USERNAME"
-    update-initramfs -u
-    wget https://raw.githubusercontent.com/bedrocklinux/bedrocklinux-userland/0.7/installer/bedrock-linux-0.7.29-x86_64.sh -O /tmp/bedrock.sh
-    sh /tmp/bedrock.sh --hijack
-    update-grub
+    # Generating FSTAB
+    echo 50;
+    echo "$ROOT_PART  /  ext4  errors=remount-ro  0  1" > /mnt/etc/fstab
+    [ -n "$EFI_PART" ] && echo "$EFI_PART  /boot/efi  vfat  umask=0077  0  2" >> /mnt/etc/fstab
+    [ -n "$SWAP_PART" ] && echo "$SWAP_PART  none  swap  sw  0  0" >> /mnt/etc/fstab
+
+    # Hijack Prep
+    echo 60;
+    wget https://github.com/bedrocklinux/bedrocklinux-userland/releases/download/0.7.31beta3/bedrock-linux-0.7.31-x86_64.sh -O /mnt/bedrock-install.sh
+    chmod +x /mnt/bedrock-install.sh
+
+    # Chroot Logic
+    echo 80;
+    for i in dev dev/pts proc sys run; do mount --bind /$i /mnt/$i; done
+
+    cat <<EOF | chroot /mnt /bin/bash
+    apt-get update
+    if [ "$IS_UEFI" = true ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y grub-efi-amd64 efibootmgr
+        grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ENux
+    else
+        DEBIAN_FRONTEND=noninteractive apt-get install -y grub-pc
+        grub-install --target=i386-pc "$SELECTED_DISK"
+    fi
+    grub-mkconfig -o /boot/grub/grub.cfg
+    yes "Not reversible!" | bash /bedrock-install.sh --hijack
 EOF
     echo 100
-) | whiptail --title " DEPLOYING ENux " --gauge "Bootstrap in progress..." $WT_HEIGHT $WT_WIDTH 0
+) | whiptail --title " DEPLOYING ENux " --gauge "Cloning system and hijacking via Bedrock..." $WT_HEIGHT $WT_WIDTH 0
 
-whiptail --title " DEPLOYMENT COMPLETE " --msgbox "ENux is ready. Reboot to initialize Bedrock." $WT_HEIGHT $WT_WIDTH
-umount -l /mnt
+# --- 6. Cleanup ---
+umount -l /mnt/dev/pts /mnt/dev /mnt/proc /mnt/sys /mnt/run 2>/dev/null
+umount -R /mnt 2>/dev/null
+
+whiptail --title " SUCCESS " --msgbox "Installation complete. Remove installation media and reboot." $WT_HEIGHT $WT_WIDTH
 clear
