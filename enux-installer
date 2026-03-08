@@ -1,119 +1,160 @@
 #!/bin/bash
+set -e
 
-echo "-----------------------------"
-echo "WELCOME TO THE ENUX INSTALLER"
-echo "-----------------------------"
+clear
+echo "================================="
+echo "        ENux CLI Installer       "
+echo "================================="
+echo
 
-# --- 1. UEFI/BIOS Detection ---
-if [ -d "/sys/firmware/efi" ]; then
-    IS_UEFI=true
-    echo "System Mode: UEFI Detected"
-else
-    IS_UEFI=false
-    echo "System Mode: BIOS/Legacy Detected"
-fi
+read -p "Press Enter to start installation..."
 
-# --- 2. Disk Selection & Partitioning ---
+echo
 lsblk
-echo ""
-read -p "Enter the disk to partition (e.g., /dev/sda): " SELECTED_DISK
+echo
+read -p "Enter the drive to install ENux on (example: /dev/sda): " DRIVE
 
-echo "Launching cfdisk..."
+echo
+echo "Opening cfdisk..."
 sleep 2
-cfdisk "$SELECTED_DISK"
+cfdisk $DRIVE
 
-# --- 3. Partition Assignment ---
+while true; do
+    read -p "Return to cfdisk? (y/n): " CF
+    case $CF in
+        y|Y ) cfdisk $DRIVE ;;
+        n|N ) break ;;
+        * ) echo "Please answer y or n." ;;
+    esac
+done
+
+echo
 lsblk
-echo ""
-read -p "Enter your ROOT partition (e.g., /dev/sda2): " ROOT_PART
+echo
 
-if [ "$IS_UEFI" = true ]; then
-    read -p "Enter your EFI partition (e.g., /dev/sda1): " EFI_PART
+read -p "Enter ROOT partition (example: /dev/sda2): " ROOT
+
+read -p "Create swap? (y/n): " SWAPCHOICE
+if [[ "$SWAPCHOICE" =~ ^[Yy]$ ]]; then
+    read -p "Enter SWAP partition (example: /dev/sda3): " SWAP
 fi
 
-read -p "Did you create a SWAP partition? (y/n): " HAS_SWAP
-if [[ "$HAS_SWAP" =~ ^[Yy]$ ]]; then
-    read -p "Enter your SWAP partition (e.g., /dev/sda3): " SWAP_PART
+echo
+read -p "WARNING: This will erase $ROOT. Continue? (yes/no): " CONF
+[[ "$CONF" != "yes" ]] && exit 1
+
+echo
+echo "Formatting root partition..."
+mkfs.ext4 $ROOT
+
+if [[ "$SWAPCHOICE" =~ ^[Yy]$ ]]; then
+    echo "Formatting swap..."
+    mkswap $SWAP
+    swapon $SWAP
 fi
 
-# --- 4. Formatting & Mounting ---
-echo "Formatting and mounting..."
-mkfs.ext4 -F "$ROOT_PART"
-mount "$ROOT_PART" /mnt
+echo
+echo "Mounting root partition..."
+mkdir -p /mnt/ENux
+mount $ROOT /mnt/ENux
 
-if [ "$IS_UEFI" = true ]; then
-    mkfs.fat -F 32 "$EFI_PART"
-    mkdir -p /mnt/boot/efi
-    mount "$EFI_PART" /mnt/boot/efi
-fi
+echo
+echo "Bootstrapping ENux..."
+enuxbootstrap /mnt/ENux
 
-if [[ -n "$SWAP_PART" ]]; then
-    mkswap "$SWAP_PART"
-    swapon "$SWAP_PART"
-fi
+echo
+echo "Installing base packages..."
+chroot /mnt/ENux apt update
+chroot /mnt/ENux apt install -y \
+network-manager \
+sudo \
+wget \
+curl \
+xfce4 \
+xfce4-goodies \
+lightdm \
+lightdm-gtk-greeter \
+grub-pc \
+grub-efi-amd64 \
+initramfs-tools
 
-# --- 5. Copying the Root Filesystem ---
-echo "Copying system files to /mnt (Excluding virtual FS)..."
-# Simplified exclude syntax to prevent EOF errors
-rsync -aAXv \
-    --exclude=/dev/* \
-    --exclude=/proc/* \
-    --exclude=/sys/* \
-    --exclude=/tmp/* \
-    --exclude=/run/* \
-    --exclude=/mnt/* \
-    --exclude=/media/* \
-    --exclude=/lost+found \
-    / /mnt
+echo
+echo "Setting hostname..."
+read -p "Enter hostname: " HOSTNAME
+echo "$HOSTNAME" > /mnt/ENux/etc/hostname
 
-# --- 6. Generating FSTAB ---
-echo "Generating fstab..."
-echo "$ROOT_PART  /  ext4  errors=remount-ro  0  1" > /mnt/etc/fstab
-if [ "$IS_UEFI" = true ]; then
-    echo "$EFI_PART  /boot/efi  vfat  umask=0077  0  2" >> /mnt/etc/fstab
-fi
-if [[ -n "$SWAP_PART" ]]; then
-    echo "$SWAP_PART  none  swap  sw  0  0" >> /mnt/etc/fstab
-fi
+echo "127.0.0.1 localhost" >> /mnt/ENux/etc/hosts
+echo "127.0.1.1 $HOSTNAME" >> /mnt/ENux/etc/hosts
 
-# --- 7. The Bedrock Hijack Preparation ---
-echo "Downloading Bedrock Linux installer..."
-wget https://github.com/bedrocklinux/bedrocklinux-userland/releases/download/0.7.31beta3/bedrock-linux-0.7.31beta3-x86_64.sh -O /mnt/bedrock-install.sh
-chmod +x /mnt/bedrock-install.sh
+echo
+echo "Creating user..."
+read -p "Enter username: " USERNAME
 
-# --- 8. Chroot: GRUB & Hijack ---
-echo "Entering chroot to finalize..."
+chroot /mnt/ENux useradd -m -G wheel,audio,video,netdev -s /bin/bash $USERNAME
 
-# Bind mount API filesystems
-for i in dev dev/pts proc sys run; do mount --bind /$i /mnt/$i; done
+echo "Set password for $USERNAME"
+chroot /mnt/ENux passwd $USERNAME
 
-# Using a more stable chroot execution method
-chroot /mnt /bin/bash <<CHROOT_BLOCK
-apt-get update
+echo "Set root password"
+chroot /mnt/ENux passwd
 
-if [ "$IS_UEFI" = true ]; then
-    echo "Installing UEFI GRUB..."
-    DEBIAN_FRONTEND=noninteractive apt-get install -y grub-efi-amd64 efibootmgr
-    grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=BEDROCK
+echo
+echo "Detecting firmware..."
+
+if [ -d /sys/firmware/efi ]; then
+    echo "EFI system detected"
+
+    read -p "Enter EFI partition (example: /dev/sda1): " EFI
+
+    mkfs.fat -F32 $EFI
+    mkdir -p /mnt/ENux/boot/efi
+    mount $EFI /mnt/ENux/boot/efi
+
+    chroot /mnt/ENux grub-install \
+        --target=x86_64-efi \
+        --efi-directory=/boot/efi \
+        --bootloader-id=ENux
+
 else
-    echo "Installing BIOS GRUB..."
-    DEBIAN_FRONTEND=noninteractive apt-get install -y grub-pc
-    grub-install --target=i386-pc "$SELECTED_DISK"
+    echo "Legacy BIOS detected"
+
+    chroot /mnt/ENux grub-install $DRIVE
 fi
 
-grub-mkconfig -o /boot/grub/grub.cfg
+echo
+echo "Generating GRUB config..."
+chroot /mnt/ENux grub-mkconfig -o /boot/grub/grub.cfg
 
-echo "Starting Bedrock Hijack..."
-# Use 'sh' directly inside the chroot
-yes "Not reversible!" | bash /bedrock-install.sh --hijack
-CHROOT_BLOCK
+read -p "Generate initramfs? (y/n): " INIT
+if [[ "$INIT" =~ ^[Yy]$ ]]; then
+    chroot /mnt/ENux update-initramfs -c -k all
+fi
 
-echo "DONE! Unmounting..."
-umount -l /mnt/dev/pts
-umount -l /mnt/dev
-umount -l /mnt/proc
-umount -l /mnt/sys
-umount -l /mnt/run
-umount -R /mnt
+echo
+echo "Running ENux Bedrock setup..."
+chroot /mnt/ENux bash /usr/bin/enux-chrooted
 
-echo "Installation complete. Reboot for Finalizer"
+echo
+echo "Enabling services..."
+chroot /mnt/ENux systemctl enable NetworkManager
+chroot /mnt/ENux systemctl enable lightdm
+
+echo
+echo "Syncing disks..."
+sync
+
+echo
+echo "Unmounting system..."
+umount -R /mnt/ENux
+
+echo
+echo "================================="
+echo "       ENux installation done    "
+echo "================================="
+
+read -p "Reboot now? (y/n): " RB
+if [[ "$RB" =~ ^[Yy]$ ]]; then
+    reboot
+else
+    echo "Installation finished. Reboot manually when ready."
+fi
