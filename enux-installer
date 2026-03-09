@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+[ "$EUID" -ne 0 ] && echo "Run as root." && exit 1 
+
 clear
 echo "================================="
 echo "        ENux CLI Installer       "
@@ -62,10 +64,12 @@ echo
 echo "Bootstrapping ENux..."
 enuxbootstrap /mnt/ENux
 
+wget https://raw.githubusercontent.com/ENux-Distro/ENux-Utils/refs/heads/main/enux-chroot -O /usr/bin/enux-chroot
+
 echo
 echo "Installing base packages..."
-chroot /mnt/ENux apt update
-chroot /mnt/ENux apt install -y \
+enux-chroot /mnt/ENux apt update
+enux-chroot /mnt/ENux apt install -y \
 network-manager \
 sudo \
 wget \
@@ -90,13 +94,13 @@ echo
 echo "Creating user..."
 read -p "Enter username: " USERNAME
 
-chroot /mnt/ENux useradd -m -G wheel,audio,video,netdev -s /bin/bash $USERNAME
+enux-chroot /mnt/ENux useradd -m -G wheel,audio,video,netdev -s /bin/bash $USERNAME
 
 echo "Set password for $USERNAME"
-chroot /mnt/ENux passwd $USERNAME
+enux-chroot /mnt/ENux passwd $USERNAME
 
 echo "Set root password"
-chroot /mnt/ENux passwd
+enux-chroot /mnt/ENux passwd
 
 echo
 echo "Detecting firmware..."
@@ -110,7 +114,7 @@ if [ -d /sys/firmware/efi ]; then
     mkdir -p /mnt/ENux/boot/efi
     mount $EFI /mnt/ENux/boot/efi
 
-    chroot /mnt/ENux grub-install \
+    enux-chroot /mnt/ENux grub-install \
         --target=x86_64-efi \
         --efi-directory=/boot/efi \
         --bootloader-id=ENux
@@ -118,26 +122,24 @@ if [ -d /sys/firmware/efi ]; then
 else
     echo "Legacy BIOS detected"
 
-    chroot /mnt/ENux grub-install $DRIVE
+    enux-chroot /mnt/ENux grub-install $DRIVE
 fi
 
 echo
 echo "Generating GRUB config..."
-chroot /mnt/ENux grub-mkconfig -o /boot/grub/grub.cfg
+enux-chroot /mnt/ENux grub-mkconfig -o /boot/grub/grub.cfg
 
-read -p "Generate initramfs? (y/n): " INIT
-if [[ "$INIT" =~ ^[Yy]$ ]]; then
-    chroot /mnt/ENux update-initramfs -c -k all
-fi
+echo "Updating initramfs"
+enux-chroot /mnt/ENux update-initramfs -c -k all
 
 echo
 echo "Running ENux Bedrock setup..."
-chroot /mnt/ENux bash /usr/bin/enux-chrooted
+enux-chroot /mnt/ENux bash /usr/bin/enux-chrooted
 
 echo
 echo "Enabling services..."
-chroot /mnt/ENux systemctl enable NetworkManager
-chroot /mnt/ENux systemctl enable lightdm
+enux-chroot /mnt/ENux systemctl enable NetworkManager
+enux-chroot /mnt/ENux systemctl enable lightdm
 
 echo
 echo "Syncing disks..."
