@@ -30,16 +30,16 @@ sudo mount --bind /dev "$TARGET/dev"
 sudo cp /etc/resolv.conf "$TARGET/etc/resolv.conf"
 
 # Download DEBs safely
-sudo wget -O "$TARGET/linux-headers-6.18.15-enux_6.18.15-2_amd64.deb" \
-    https://github.com/ENux-Distro/mirrors/releases/download/6.18.15-enux/linux-headers-6.18.15-enux_6.18.15-2_amd64.deb
+sudo wget -O "$TARGET/linux-headers-7.0.0-rc2-enux-enux_7.0.0.rc2-1_amd64.deb" \
+    https://github.com/ENux-Distro/ENux-Kernels/releases/download/7.0-rc2/linux-headers-7.0.0-rc2-enux-enux_7.0.0.rc2-1_amd64.deb
 
-sudo wget -O "$TARGET/linux-image-6.18.15-enux_6.18.15-2_amd64.deb" \
-    https://github.com/ENux-Distro/mirrors/releases/download/6.18.15-enux/linux-image-6.18.15-enux_6.18.15-2_amd64.deb
+sudo wget -O "$TARGET/linux-image-7.0.0-rc2-enux-enux_7.0.0.rc2-1_amd64.deb" \
+    https://github.com/ENux-Distro/ENux-Kernels/releases/download/7.0-rc2/linux-image-7.0.0-rc2-enux-enux_7.0.0.rc2-1_amd64.deb
 
 # Install kernel inside chroot
 sudo chroot "$TARGET" /bin/bash -c "\
     apt update; \
-    apt install -y /linux-headers-6.18.15-enux_6.18.15-2_amd64.deb /linux-image-6.18.15-enux_6.18.15-2_amd64.deb || apt install -f -y \
+    apt install -y /linux-headers-7.0.0-rc2-enux-enux_7.0.0.rc2-1_amd64.deb /linux-image-7.0.0-rc2-enux-enux_7.0.0.rc2-1_amd64.deb || apt install -f -y \
 "
 
 # Download enux-chroot helper
