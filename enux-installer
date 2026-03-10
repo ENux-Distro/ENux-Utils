@@ -86,6 +86,8 @@ lightdm \
 lightdm-gtk-greeter \
 initramfs-tools
 
+cp /etc/os-release /mnt/ENux/etc/os-release
+
 echo
 echo "Setting hostname..."
 read -p "Enter hostname: " HOSTNAME
