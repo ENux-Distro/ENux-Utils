@@ -60,11 +60,17 @@ echo "Mounting root partition..."
 mkdir -p /mnt/ENux
 mount $ROOT /mnt/ENux
 
+apt install -y arch-install-scripts
+
 echo
 echo "Bootstrapping ENux..."
+wget https://raw.githubusercontent.com/ENux-Distro/ENux-Utils/refs/heads/main/enuxbootstrap -O /usr/bin/enuxbootstrap
+chmod +x /usr/bin/enuxbootstrap
+
 enuxbootstrap /mnt/ENux
 
 wget https://raw.githubusercontent.com/ENux-Distro/ENux-Utils/refs/heads/main/enux-chroot -O /usr/bin/enux-chroot
+chmod +x /usr/bin/enux-chroot
 
 echo
 echo "Installing base packages..."
@@ -78,8 +84,6 @@ xfce4 \
 xfce4-goodies \
 lightdm \
 lightdm-gtk-greeter \
-grub-pc \
-grub-efi-amd64 \
 initramfs-tools
 
 echo
@@ -94,7 +98,7 @@ echo
 echo "Creating user..."
 read -p "Enter username: " USERNAME
 
-enux-chroot /mnt/ENux useradd -m -G wheel,audio,video,netdev -s /bin/bash $USERNAME
+enux-chroot /mnt/ENux useradd -m -G sudo,audio,video,netdev -s /bin/bash $USERNAME
 
 echo "Set password for $USERNAME"
 enux-chroot /mnt/ENux passwd $USERNAME
@@ -113,7 +117,7 @@ if [ -d /sys/firmware/efi ]; then
     mkfs.fat -F32 $EFI
     mkdir -p /mnt/ENux/boot/efi
     mount $EFI /mnt/ENux/boot/efi
-
+    enux-chroot /mnt/ENux apt install grub-efi-amd64 grub-common
     enux-chroot /mnt/ENux grub-install \
         --target=x86_64-efi \
         --efi-directory=/boot/efi \
@@ -121,25 +125,31 @@ if [ -d /sys/firmware/efi ]; then
 
 else
     echo "Legacy BIOS detected"
-
+    enux-chroot /mnt/ENux apt install grub-pc grub-common
     enux-chroot /mnt/ENux grub-install $DRIVE
 fi
 
 echo
-echo "Generating GRUB config..."
-enux-chroot /mnt/ENux grub-mkconfig -o /boot/grub/grub.cfg
+
+genfstab -U /mnt/ENux > /mnt/ENux/etc/fstab
 
 echo "Updating initramfs"
 enux-chroot /mnt/ENux update-initramfs -c -k all
 
 echo
+echo "Generating GRUB config..."
+enux-chroot /mnt/ENux grub-mkconfig -o /boot/grub/grub.cfg
+
+echo
 echo "Running ENux Bedrock setup..."
-enux-chroot /mnt/ENux bash /usr/bin/enux-chrooted
+wget https://raw.githubusercontent.com/ENux-Distro/mirrors/refs/heads/main/enux-chroot -O /usr/local/bin/enux-chrooted
+enux-chroot /mnt/ENux bash /usr/local/bin/enux-chrooted
 
 echo
 echo "Enabling services..."
 enux-chroot /mnt/ENux systemctl enable NetworkManager
 enux-chroot /mnt/ENux systemctl enable lightdm
+enux-chroot /mnt/ENux rm -rf /usr/share/images/desktop-base
 
 echo
 echo "Syncing disks..."
