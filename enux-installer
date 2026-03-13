@@ -113,7 +113,7 @@ cp /usr/share/enux/enux-firstboot.desktop \
 /mnt/ENux/home/"$USERNAME"/.config/autostart/enux-firstboot.desktop || true
 
 enux-chroot /mnt/ENux chown -R "$USERNAME:$USERNAME" \
-/mnt/ENux/home/"$USERNAME"/.config || true
+/home/"$USERNAME"/.config || true
 
 pause "Set root password"
 enux-chroot /mnt/ENux passwd
