@@ -1,79 +1,73 @@
 #!/bin/bash
 set -e
 
-[ "$EUID" -ne 0 ] && echo "Run as root." && exit 1 
+[ "$EUID" -ne 0 ] && echo "Run as root." && exit 1
 
-clear
-echo "================================="
-echo "        ENux CLI Installer       "
-echo "================================="
-echo
+TITLE="ENux Installer"
 
-read -p "Press Enter to start installation..."
+pause(){
+    whiptail --title "$TITLE" --msgbox "$1" 10 60
+}
 
-echo
-lsblk
-echo
-read -p "Enter the drive to install ENux on (example: /dev/sda): " DRIVE
+INPUT(){
+    whiptail --title "$TITLE" --inputbox "$1" 10 60 "$2" 3>&1 1>&2 2>&3
+}
 
-echo
-echo "Opening cfdisk..."
-sleep 2
+YESNO(){
+    whiptail --title "$TITLE" --yesno "$1" 10 60
+}
+
+MENU(){
+    whiptail --title "$TITLE" --menu "$1" 15 60 6 "$@" 3>&1 1>&2 2>&3
+}
+
+pause "Welcome to the ENux Installer"
+
+DRIVE=$(INPUT "Enter the drive to install ENux on (example: /dev/sda)")
+
+pause "Opening partition editor"
+
 cfdisk $DRIVE
 
-while true; do
-    read -p "Return to cfdisk? (y/n): " CF
-    case $CF in
-        y|Y ) cfdisk $DRIVE ;;
-        n|N ) break ;;
-        * ) echo "Please answer y or n." ;;
-    esac
+while YESNO "Return to cfdisk?"; do
+    cfdisk $DRIVE
 done
 
-echo
-lsblk
-echo
+ROOT=$(INPUT "Enter ROOT partition (example: /dev/sda2)")
 
-read -p "Enter ROOT partition (example: /dev/sda2): " ROOT
-
-read -p "Create swap? (y/n): " SWAPCHOICE
-if [[ "$SWAPCHOICE" =~ ^[Yy]$ ]]; then
-    read -p "Enter SWAP partition (example: /dev/sda3): " SWAP
+if YESNO "Create swap?"; then
+    SWAP=$(INPUT "Enter SWAP partition (example: /dev/sda3)")
+    USE_SWAP=true
+else
+    USE_SWAP=false
 fi
 
-echo
-read -p "WARNING: This will erase $ROOT. Continue? (yes/no): " CONF
-[[ "$CONF" != "yes" ]] && exit 1
+if ! YESNO "WARNING: This will erase $ROOT. Continue?"; then
+    exit 1
+fi
 
-echo
-echo "Formatting root partition..."
+pause "Formatting root partition..."
+
 mkfs.ext4 $ROOT
 
-if [[ "$SWAPCHOICE" =~ ^[Yy]$ ]]; then
-    echo "Formatting swap..."
+if $USE_SWAP; then
     mkswap $SWAP
     swapon $SWAP
 fi
 
-echo
-echo "Mounting root partition..."
+pause "Mounting system..."
+
 mkdir -p /mnt/ENux
 mount $ROOT /mnt/ENux
 
 apt install -y arch-install-scripts
 
-echo
-echo "Bootstrapping ENux..."
-wget https://raw.githubusercontent.com/ENux-Distro/ENux-Utils/refs/heads/main/enuxbootstrap -O /usr/bin/enuxbootstrap
-chmod +x /usr/bin/enuxbootstrap
+pause "Bootstrapping ENux..."
 
 enuxbootstrap /mnt/ENux
 
-wget https://raw.githubusercontent.com/ENux-Distro/ENux-Utils/refs/heads/main/enux-chroot -O /usr/bin/enux-chroot
-chmod +x /usr/bin/enux-chroot
+pause "Installing base packages..."
 
-echo
-echo "Installing base packages..."
 enux-chroot /mnt/ENux apt update
 enux-chroot /mnt/ENux apt install -y \
 network-manager \
@@ -87,88 +81,91 @@ lightdm-gtk-greeter \
 initramfs-tools
 
 cp /etc/os-release /mnt/ENux/etc/os-release
+cp /usr/bin/enux-firstboot /mnt/ENux/usr/bin/enux-firstboot
 
-echo
-echo "Setting hostname..."
-read -p "Enter hostname: " HOSTNAME
+HOSTNAME=$(INPUT "Enter hostname")
+
 echo "$HOSTNAME" > /mnt/ENux/etc/hostname
-
 echo "127.0.0.1 localhost" >> /mnt/ENux/etc/hosts
 echo "127.0.1.1 $HOSTNAME" >> /mnt/ENux/etc/hosts
 
-echo
-echo "Creating user..."
-read -p "Enter username: " USERNAME
+USERNAME=$(INPUT "Enter username")
 
 enux-chroot /mnt/ENux useradd -m -G sudo,audio,video,netdev -s /bin/bash $USERNAME
 
-echo "Set password for $USERNAME"
+pause "Set password for $USERNAME"
 enux-chroot /mnt/ENux passwd $USERNAME
 
-echo "Set root password"
+mkdir -p /mnt/ENux/home/"$USERNAME"/.config/autostart || true
+cp /usr/share/enux/enux-firstboot.desktop \
+/mnt/ENux/home/"$USERNAME"/.config/autostart/enux-firstboot.desktop || true
+
+enux-chroot /mnt/ENux chown -R "$USERNAME:$USERNAME" \
+/home/"$USERNAME"/.config || true
+
+pause "Set root password"
 enux-chroot /mnt/ENux passwd
 
-echo
-echo "Detecting firmware..."
+pause "Detecting firmware..."
 
 if [ -d /sys/firmware/efi ]; then
-    echo "EFI system detected"
 
-    read -p "Enter EFI partition (example: /dev/sda1): " EFI
+    EFI=$(INPUT "Enter EFI partition (example: /dev/sda1)")
 
-    mkfs.fat -F32 $EFI
+    mkfs.fat -F32 $EFI || true
     mkdir -p /mnt/ENux/boot/efi
     mount $EFI /mnt/ENux/boot/efi
-    enux-chroot /mnt/ENux apt install grub-efi-amd64 grub-common
+
+    enux-chroot /mnt/ENux apt install grub-efi-amd64 grub-common -y
+
     enux-chroot /mnt/ENux grub-install \
         --target=x86_64-efi \
         --efi-directory=/boot/efi \
         --bootloader-id=ENux
 
 else
-    echo "Legacy BIOS detected"
-    enux-chroot /mnt/ENux apt install grub-pc grub-common
+
+    enux-chroot /mnt/ENux apt install grub-pc grub-common -y
     enux-chroot /mnt/ENux grub-install $DRIVE
+
 fi
 
-echo
+pause "Generating fstab..."
 
 genfstab -U /mnt/ENux > /mnt/ENux/etc/fstab
 
-echo "Updating initramfs"
+pause "Updating initramfs..."
+
 enux-chroot /mnt/ENux update-initramfs -c -k all
 
-echo
-echo "Generating GRUB config..."
+pause "Generating GRUB config..."
+
 enux-chroot /mnt/ENux grub-mkconfig -o /boot/grub/grub.cfg
 
-echo
-echo "Running ENux Bedrock setup..."
-wget https://raw.githubusercontent.com/ENux-Distro/mirrors/refs/heads/main/enux-chroot -O /usr/local/bin/enux-chrooted
+pause "Running ENux Bedrock setup..."
+
+enux-chroot /mnt/ENux wget \
+https://raw.githubusercontent.com/ENux-Distro/mirrors/refs/heads/main/enux-chroot \
+-O /usr/local/bin/enux-chrooted
+
 enux-chroot /mnt/ENux bash /usr/local/bin/enux-chrooted
 
-echo
-echo "Enabling services..."
+pause "Enabling services..."
+
 enux-chroot /mnt/ENux systemctl enable NetworkManager
 enux-chroot /mnt/ENux systemctl enable lightdm
-enux-chroot /mnt/ENux rm -rf /usr/share/images/desktop-base
 
-echo
-echo "Syncing disks..."
+enux-chroot /mnt/ENux rm -rf /usr/share/images/desktop-base
+enux-chroot /mnt/ENux rm -rf /usr/local/bin/enux-chrooted
+
+pause "Syncing disks..."
+
 sync
 
-echo
-echo "Unmounting system..."
+pause "Unmounting system..."
+
 umount -R /mnt/ENux
 
-echo
-echo "================================="
-echo "       ENux installation done    "
-echo "================================="
-
-read -p "Reboot now? (y/n): " RB
-if [[ "$RB" =~ ^[Yy]$ ]]; then
+if YESNO "Installation finished. Reboot now?"; then
     reboot
-else
-    echo "Installation finished. Reboot manually when ready."
 fi
