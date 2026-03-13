@@ -17,25 +17,37 @@ YESNO(){
     whiptail --title "$TITLE" --yesno "$1" 10 60
 }
 
-MENU(){
-    whiptail --title "$TITLE" --menu "$1" 15 60 6 "$@" 3>&1 1>&2 2>&3
-}
-
 pause "Welcome to the ENux Installer"
+
+pause "Available drives on this system"
+
+lsblk -d -o NAME,SIZE,MODEL,TYPE > /tmp/enux-disks
+whiptail --title "$TITLE - Drives" --textbox /tmp/enux-disks 20 70
 
 DRIVE=$(INPUT "Enter the drive to install ENux on (example: /dev/sda)")
 
 pause "Opening partition editor"
 
-cfdisk $DRIVE
+cfdisk "$DRIVE"
 
 while YESNO "Return to cfdisk?"; do
-    cfdisk $DRIVE
+    cfdisk "$DRIVE"
 done
+
+pause "Current partitions on $DRIVE"
+
+lsblk "$DRIVE" > /tmp/enux-parts
+whiptail --title "$TITLE - Partitions" --textbox /tmp/enux-parts 20 70
 
 ROOT=$(INPUT "Enter ROOT partition (example: /dev/sda2)")
 
 if YESNO "Create swap?"; then
+
+    pause "Available partitions for swap"
+
+    lsblk "$DRIVE" > /tmp/enux-swap
+    whiptail --title "$TITLE - Partitions" --textbox /tmp/enux-swap 20 70
+
     SWAP=$(INPUT "Enter SWAP partition (example: /dev/sda3)")
     USE_SWAP=true
 else
@@ -48,17 +60,17 @@ fi
 
 pause "Formatting root partition..."
 
-mkfs.ext4 $ROOT
+mkfs.ext4 "$ROOT"
 
 if $USE_SWAP; then
-    mkswap $SWAP
-    swapon $SWAP
+    mkswap "$SWAP"
+    swapon "$SWAP"
 fi
 
 pause "Mounting system..."
 
 mkdir -p /mnt/ENux
-mount $ROOT /mnt/ENux
+mount "$ROOT" /mnt/ENux
 
 apt install -y arch-install-scripts
 
@@ -91,17 +103,17 @@ echo "127.0.1.1 $HOSTNAME" >> /mnt/ENux/etc/hosts
 
 USERNAME=$(INPUT "Enter username")
 
-enux-chroot /mnt/ENux useradd -m -G sudo,audio,video,netdev -s /bin/bash $USERNAME
+enux-chroot /mnt/ENux useradd -m -G sudo,audio,video,netdev -s /bin/bash "$USERNAME"
 
 pause "Set password for $USERNAME"
-enux-chroot /mnt/ENux passwd $USERNAME
+enux-chroot /mnt/ENux passwd "$USERNAME"
 
 mkdir -p /mnt/ENux/home/"$USERNAME"/.config/autostart || true
 cp /usr/share/enux/enux-firstboot.desktop \
 /mnt/ENux/home/"$USERNAME"/.config/autostart/enux-firstboot.desktop || true
 
 enux-chroot /mnt/ENux chown -R "$USERNAME:$USERNAME" \
-/home/"$USERNAME"/.config || true
+/mnt/ENux/home/"$USERNAME"/.config || true
 
 pause "Set root password"
 enux-chroot /mnt/ENux passwd
@@ -110,13 +122,18 @@ pause "Detecting firmware..."
 
 if [ -d /sys/firmware/efi ]; then
 
+    pause "Available partitions for EFI"
+
+    lsblk "$DRIVE" > /tmp/enux-efi
+    whiptail --title "$TITLE - EFI Partitions" --textbox /tmp/enux-efi 20 70
+
     EFI=$(INPUT "Enter EFI partition (example: /dev/sda1)")
 
-    mkfs.fat -F32 $EFI || true
+    mkfs.fat -F32 "$EFI" || true
     mkdir -p /mnt/ENux/boot/efi
-    mount $EFI /mnt/ENux/boot/efi
+    mount "$EFI" /mnt/ENux/boot/efi
 
-    enux-chroot /mnt/ENux apt install grub-efi-amd64 grub-common -y
+    enux-chroot /mnt/ENux apt install -y grub-efi-amd64 grub-common
 
     enux-chroot /mnt/ENux grub-install \
         --target=x86_64-efi \
@@ -125,8 +142,8 @@ if [ -d /sys/firmware/efi ]; then
 
 else
 
-    enux-chroot /mnt/ENux apt install grub-pc grub-common -y
-    enux-chroot /mnt/ENux grub-install $DRIVE
+    enux-chroot /mnt/ENux apt install -y grub-pc grub-common
+    enux-chroot /mnt/ENux grub-install "$DRIVE"
 
 fi
 
